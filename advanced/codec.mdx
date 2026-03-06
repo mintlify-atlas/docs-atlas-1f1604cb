@@ -1,0 +1,86 @@
+---
+title: HTTP Codecs
+description: Type-safe encoding and decoding of HTTP requests and responses
+---
+
+ZIO HTTP provides a comprehensive codec system for encoding and decoding HTTP requests and responses in a type-safe manner.
+
+## Overview
+
+HTTP codecs enable:
+
+- **Type Safety**: Compile-time guarantees for request/response structure
+- **Automatic Validation**: Built-in validation with meaningful errors
+- **Documentation**: Self-documenting API with inline descriptions
+- **Composition**: Combine codecs to build complex types
+
+## Path Codecs
+
+Path codecs extract typed values from URL paths:
+
+```scala
+import zio.http.codec.PathCodec._
+
+val userPath = literal("users") / int("userId")
+// Matches: /users/123
+// Extracts: userId = 123
+```
+
+## Query Codecs
+
+Query codecs handle URL query parameters:
+
+```scala
+import zio.http.codec.QueryCodec._
+
+val searchQuery = queryStr("q") & queryInt("page").optional
+```
+
+## Header Codecs
+
+Header codecs work with HTTP headers:
+
+```scala
+import zio.http.codec.HeaderCodec._
+
+val authHeader = authorization
+val contentTypeHeader = contentType
+```
+
+## Content Codecs
+
+Content codecs handle request/response bodies with ZIO Schema:
+
+```scala
+import zio.schema._
+import zio.http.codec.HttpContentCodec
+
+case class User(id: Int, name: String)
+
+object User {
+  implicit val schema: Schema[User] = DeriveSchema.gen[User]
+}
+
+val userCodec = HttpContentCodec.from(implicitly[Schema[User]])
+```
+
+<Note>
+For complete API reference, see the [Codec API](/api/codec) page.
+</Note>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Codec API" href="/api/codec">
+    Complete API reference for codecs
+  </Card>
+  <Card title="Endpoints" href="/advanced/endpoints">
+    Use codecs with endpoints
+  </Card>
+  <Card title="Path Parameters" href="/routing/path-parameters">
+    Extract path parameters
+  </Card>
+  <Card title="Query Parameters" href="/routing/query-parameters">
+    Handle query parameters
+  </Card>
+</CardGroup>

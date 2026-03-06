@@ -1,0 +1,163 @@
+---
+title: HandlerAspect API
+description: API reference for handler aspects
+---
+
+Handler aspects allow you to modify the behavior of handlers in a composable way, similar to middleware but at the handler level.
+
+## Type Signature
+
+```scala
+trait HandlerAspect[+LowerEnv, -UpperEnv] {
+  def apply[R1 >: LowerEnv <: UpperEnv, Err](handler: Handler[R1, Err, Request, Response]): Handler[R1, Err, Request, Response]
+}
+```
+
+## Built-in Aspects
+
+### timeout
+
+```scala
+def timeout(duration: Duration): HandlerAspect[Any, Any]
+```
+
+Fails the handler if it exceeds the timeout.
+
+<ParamField path="duration" type="Duration" required>
+  Maximum execution duration
+</ParamField>
+
+**Example:**
+```scala
+import zio.http._
+import scala.concurrent.duration._
+
+val handler = Handler.fromZIO {
+  ZIO.sleep(5.seconds) *> ZIO.succeed(Response.ok)
+} @@ HandlerAspect.timeout(3.seconds)
+```
+
+### whenStatus
+
+```scala
+def whenStatus(condition: Status => Boolean)(aspect: HandlerAspect[Any, Any]): HandlerAspect[Any, Any]
+```
+
+Applies an aspect conditionally based on response status.
+
+### logging
+
+```scala
+def logging(logLevel: LogLevel = LogLevel.Info): HandlerAspect[Any, Any]
+```
+
+Logs handler execution.
+
+### auth
+
+```scala
+def auth[User](authenticate: Request => ZIO[Any, Response, User]): HandlerAspect[User, Any]
+```
+
+Authenticates requests and provides user context.
+
+## Applying Aspects
+
+Apply aspects using the `@@` operator:
+
+```scala
+val handler = Handler.fromZIO {
+  ZIO.succeed(Response.text("Hello"))
+} @@ HandlerAspect.timeout(5.seconds)
+  @@ HandlerAspect.logging()
+```
+
+## Creating Custom Aspects
+
+```scala
+def customAspect: HandlerAspect[Any, Any] = new HandlerAspect[Any, Any] {
+  def apply[R, Err](handler: Handler[R, Err, Request, Response]) = {
+    handler.contramapZIO[R, Request] { request =>
+      // Pre-process request
+      Console.printLine(s"Before: ${request.method}") *>
+        ZIO.succeed(request)
+    }.mapZIO { response =>
+      // Post-process response
+      Console.printLine(s"After: ${response.status}") *>
+        ZIO.succeed(response)
+    }
+  }
+}
+```
+
+## Authentication Aspect
+
+```scala
+import zio._
+import zio.http._
+
+case class User(id: Int, name: String)
+
+val authAspect = HandlerAspect.auth[User] { request =>
+  request.header(Header.Authorization) match {
+    case Some(Header.Authorization.Bearer(token)) if token == "secret" =>
+      ZIO.succeed(User(1, "Alice"))
+    case _ =>
+      ZIO.fail(Response.unauthorized)
+  }
+}
+
+val protectedHandler = Handler.fromFunction { (request: Request) =>
+  Response.text("Protected resource")
+} @@ authAspect
+```
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+import scala.concurrent.duration._
+
+object AspectExample extends ZIOAppDefault {
+  // Custom aspect for timing
+  def timed: HandlerAspect[Any, Any] = new HandlerAspect[Any, Any] {
+    def apply[R, Err](handler: Handler[R, Err, Request, Response]) = {
+      handler.contramapZIO[R, Request] { request =>
+        Clock.nanoTime.map(start => request -> start)
+      }.mapZIO { case (response, start) =>
+        for {
+          end   <- Clock.nanoTime
+          millis = (end - start) / 1_000_000
+          _     <- Console.printLine(s"Request took ${millis}ms")
+        } yield response
+      }
+    }
+  }
+  
+  val routes = Routes(
+    Method.GET / "api" -> handler {
+      ZIO.sleep(100.millis) *> ZIO.succeed(Response.ok)
+    } @@ timed @@ HandlerAspect.timeout(5.seconds)
+  )
+  
+  def run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Handlers" href="/concepts/handlers">
+    Handler concepts
+  </Card>
+  <Card title="Middleware" href="/api/middleware">
+    Middleware API
+  </Card>
+  <Card title="Authentication" href="/guides/authentication">
+    Authentication guide
+  </Card>
+  <Card title="Handler API" href="/api/handler">
+    Handler API reference
+  </Card>
+</CardGroup>

@@ -1,0 +1,346 @@
+---
+title: Headers
+description: Working with HTTP headers in ZIO HTTP
+---
+
+HTTP headers are immutable collections that can be manipulated using powerful operators. ZIO HTTP provides type-safe header handling with both strongly-typed and custom headers.
+
+## Creating Headers
+
+### Single Header
+
+Create headers from name-value pairs:
+
+```scala
+import zio.http._
+
+// From a tuple
+val header1 = Headers("Content-Type" -> "application/json")
+
+// From name and value
+val header2 = Headers("Authorization", "Bearer token123")
+```
+
+### Multiple Headers
+
+Combine multiple headers:
+
+```scala
+val headers = Headers(
+  "Content-Type" -> "application/json",
+  "Authorization" -> "Bearer token123",
+  "X-Request-ID" -> "abc-123"
+)
+```
+
+### Empty Headers
+
+```scala
+val emptyHeaders = Headers.empty
+```
+
+## Type-Safe Headers
+
+ZIO HTTP provides strongly-typed headers for common HTTP headers:
+
+```scala
+import zio.http.Header._
+
+// Content-Type header
+val contentType = Headers(ContentType(MediaType.application.json))
+
+// Authorization header
+val auth = Headers(Authorization.Bearer("token123"))
+
+// Accept header
+val accept = Headers(Accept(MediaType.application.json))
+
+// Custom typed header
+val customHeader = Headers(Header.Custom("X-Custom-Header", "value"))
+```
+
+## Reading Headers
+
+### Get Header Value
+
+```scala
+import zio.http._
+
+val headers = Headers(
+  "Content-Type" -> "application/json",
+  "Authorization" -> "Bearer token123"
+)
+
+// Get as Option[String]
+val contentType: Option[String] = headers.get("Content-Type")
+// Some("application/json")
+
+// Check if header exists
+val hasAuth: Boolean = headers.contains("Authorization")
+// true
+```
+
+### Get Typed Header
+
+```scala
+import zio.http.Header._
+
+// Get strongly-typed header
+val contentType: Option[ContentType] = 
+  headers.get(Header.ContentType)
+
+// Get all values for a header type
+val acceptValues: Chunk[Accept] = 
+  headers.getAll(Header.Accept)
+```
+
+### Iterate Over Headers
+
+Headers implement `Iterable[Header]`:
+
+```scala
+// Iterate through all headers
+headers.foreach { header =>
+  println(s"${header.headerName}: ${header.renderedValue}")
+}
+
+// Convert to list
+val headerList: List[Header] = headers.toList
+
+// Filter headers
+val filtered = headers.filter(_.headerName.startsWith("X-"))
+```
+
+## Modifying Headers
+
+### Adding Headers
+
+Headers are immutable, so operations return new instances:
+
+```scala
+val original = Headers("Content-Type" -> "application/json")
+
+// Add a single header
+val withAuth = original ++ Headers("Authorization" -> "Bearer token")
+
+// Combine headers using ++
+val moreHeaders = Headers(
+  "X-Request-ID" -> "123",
+  "X-Session-ID" -> "abc"
+)
+val combined = original ++ moreHeaders
+```
+
+### Conditional Headers
+
+```scala
+val headers = Headers("Content-Type" -> "application/json")
+  .combineIf(userAuthenticated) {
+    Headers("Authorization" -> s"Bearer $token")
+  }
+
+// Or use when
+val conditionalHeaders = Headers.when(isDevelopment) {
+  Headers("X-Debug" -> "true")
+}
+```
+
+### Removing Headers
+
+```scala
+import zio.http._
+import zio.http.internal.HeaderOps
+
+// Remove a specific header by name
+val request = Request()
+  .addHeader("X-Custom" -> "value")
+  .removeHeader("X-Custom")
+```
+
+## Common Header Operations
+
+### Content-Type
+
+```scala
+import zio.http._
+import zio.http.Header._
+
+// Set content type
+val headers = Headers(ContentType(MediaType.application.json))
+
+// With charset
+val htmlHeaders = Headers(
+  ContentType(MediaType.text.html, charset = Some(Charsets.Utf8))
+)
+```
+
+### Authorization
+
+```scala
+// Bearer token
+val bearerAuth = Headers(Authorization.Bearer("your-token"))
+
+// Basic auth
+val basicAuth = Headers(Authorization.Basic("username", "password"))
+```
+
+### Accept Headers
+
+```scala
+// Single media type
+val jsonAccept = Headers(Accept(MediaType.application.json))
+
+// Multiple media types with quality factors
+val multiAccept = Headers(
+  Accept(
+    Accept.MediaTypeWithQFactor(MediaType.application.json, Some(1.0)),
+    Accept.MediaTypeWithQFactor(MediaType.application.xml, Some(0.9)),
+    Accept.MediaTypeWithQFactor(MediaType.text.html, Some(0.8))
+  )
+)
+```
+
+### Cache Control
+
+```scala
+// No cache
+val noCache = Headers(Header.Custom("Cache-Control", "no-cache"))
+
+// Max age
+val maxAge = Headers(Header.Custom("Cache-Control", "max-age=3600"))
+```
+
+### CORS Headers
+
+```scala
+val corsHeaders = Headers(
+  "Access-Control-Allow-Origin" -> "*",
+  "Access-Control-Allow-Methods" -> "GET, POST, PUT, DELETE",
+  "Access-Control-Allow-Headers" -> "Content-Type, Authorization"
+)
+```
+
+## Headers in Requests and Responses
+
+### Adding Headers to Requests
+
+```scala
+import zio.http._
+
+val request = Request
+  .get("/api/users")
+  .addHeader("Authorization", "Bearer token123")
+  .addHeader(Header.Accept(MediaType.application.json))
+```
+
+### Reading Request Headers
+
+```scala
+import zio.http._
+
+val app = Routes(
+  Method.GET / "api" / "users" -> handler { (req: Request) =>
+    val authHeader = req.headers.get("Authorization")
+    val userAgent = req.headers.get("User-Agent")
+    
+    Response.text(s"Auth: ${authHeader.getOrElse("None")}")
+  }
+).toHttpApp
+```
+
+### Setting Response Headers
+
+```scala
+import zio.http._
+
+val response = Response
+  .text("Hello, World!")
+  .addHeader("Content-Type", "text/plain")
+  .addHeader("Cache-Control", "max-age=3600")
+  .addHeader("X-Custom-Header", "custom-value")
+```
+
+## Advanced Patterns
+
+### Transform Headers
+
+```scala
+// Modify all headers
+val transformed = headers.modify { header =>
+  if (header.headerName.startsWith("X-"))
+    Header.Custom(header.headerName.toUpperCase, header.renderedValue)
+  else
+    header
+}
+```
+
+### Conditional Header Operations
+
+```scala
+// Add headers conditionally
+val headers = Headers("Content-Type" -> "application/json")
+  .when(includeDebug)
+```
+
+### Header Validation
+
+```scala
+import zio.http._
+
+val app = Routes(
+  Method.POST / "api" / "data" -> handler { (req: Request) =>
+    val contentType = req.headers.get(Header.ContentType)
+    
+    contentType match {
+      case Some(ct) if ct.mediaType == MediaType.application.json =>
+        Response.ok
+      case _ =>
+        Response.badRequest("Content-Type must be application/json")
+    }
+  }
+).toHttpApp
+```
+
+## Best Practices
+
+<Tip>
+  Use strongly-typed headers from `Header.*` instead of string literals for better type safety and IDE support.
+</Tip>
+
+<Warning>
+  Header names are case-insensitive according to HTTP specification. ZIO HTTP handles this automatically.
+</Warning>
+
+### Pattern: Header Middleware
+
+```scala
+import zio.http._
+
+// Add common headers to all responses
+val addSecurityHeaders = Middleware.addHeader(
+  "X-Content-Type-Options", "nosniff"
+) ++ Middleware.addHeader(
+  "X-Frame-Options", "DENY"
+)
+
+val app = Routes(
+  Method.GET / "api" / "data" -> handler(Response.ok)
+).toHttpApp @@ addSecurityHeaders
+```
+
+### Pattern: Request ID Tracking
+
+```scala
+import zio.http._
+import zio.Random
+
+val requestIdMiddleware = Middleware.intercept { (req, handler) =>
+  for {
+    requestId <- req.headers.get("X-Request-ID") match {
+      case Some(id) => ZIO.succeed(id)
+      case None     => Random.nextUUID.map(_.toString)
+    }
+    response <- handler(req.addHeader("X-Request-ID", requestId))
+  } yield response.addHeader("X-Request-ID", requestId)
+}
+```

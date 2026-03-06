@@ -1,0 +1,630 @@
+---
+title: "Dependency Injection with ZIO Layers"
+description: "Learn how to manage dependencies in ZIO HTTP using ZLayer for testable, maintainable applications"
+---
+
+ZIO HTTP leverages ZIO's powerful dependency injection system through ZLayer. This guide covers how to manage services, compose dependencies, and build testable HTTP applications.
+
+## Why ZLayer?
+
+ZLayer provides:
+- **Compile-time safety** - Missing dependencies are caught at compile time
+- **Automatic composition** - ZIO automatically wires dependencies
+- **Resource management** - Automatic resource acquisition and cleanup
+- **Testability** - Easy to swap implementations for testing
+
+## Basic Service Pattern
+
+### Defining a Service
+
+Define a service interface and implementation:
+
+```scala
+import zio._
+
+// Service interface
+trait UserService {
+  def getUser(id: Int): IO[String, User]
+  def createUser(user: User): IO[String, Unit]
+}
+
+case class User(id: Int, name: String, email: String)
+
+// Implementation
+case class UserServiceLive(db: Database) extends UserService {
+  
+  override def getUser(id: Int): IO[String, User] =
+    db.query(s"SELECT * FROM users WHERE id = $id")
+      .map(parseUser)
+      .mapError(_.getMessage)
+  
+  override def createUser(user: User): IO[String, Unit] =
+    db.execute(s"INSERT INTO users VALUES (${user.id}, '${user.name}', '${user.email}')")
+      .mapError(_.getMessage)
+      .unit
+}
+
+// Layer definition
+object UserService {
+  val live: ZLayer[Database, Nothing, UserService] =
+    ZLayer.fromFunction(UserServiceLive.apply _)
+}
+```
+
+### Using Services in Handlers
+
+Access services in handlers using `ZIO.serviceWith` or `ZIO.serviceWithZIO`:
+
+```scala
+import zio.http._
+
+val routes = Routes(
+  // Using ZIO.serviceWith for synchronous access
+  Method.GET / "users" / int("id") ->
+    handler { (id: Int, _: Request) =>
+      ZIO.serviceWithZIO[UserService](_.getUser(id))
+        .map(user => Response.json(user.toJson))
+        .orElseFail(Response.notFound(s"User $id not found"))
+    },
+  
+  // Using ZIO.serviceWithZIO for effectful operations
+  Method.POST / "users" ->
+    handler { (request: Request) =>
+      for {
+        user <- request.body.to[User]
+                  .orElseFail(Response.badRequest("Invalid user data"))
+        _    <- ZIO.serviceWithZIO[UserService](_.createUser(user))
+                  .orElseFail(Response.internalServerError("Failed to create user"))
+      } yield Response.ok
+    },
+)
+```
+
+<Info>
+Use `ZIO.serviceWithZIO` when the service method returns a ZIO effect, and `ZIO.serviceWith` when it returns a pure value.
+</Info>
+
+## Creating Layers
+
+### Simple Layer
+
+Create a layer from a value:
+
+```scala
+val configLayer: ULayer[Config] =
+  ZLayer.succeed(Config(host = "localhost", port = 8080))
+```
+
+### Layer with Dependencies
+
+Create a layer that depends on other layers:
+
+```scala
+case class DatabaseLive(config: Config) extends Database {
+  override def query(sql: String): Task[ResultSet] = ???
+  override def execute(sql: String): Task[Unit] = ???
+}
+
+object Database {
+  val live: ZLayer[Config, Nothing, Database] =
+    ZLayer.fromFunction(DatabaseLive.apply _)
+}
+```
+
+### Layer with Resource Management
+
+Use `ZLayer.scoped` for resources that need cleanup:
+
+```scala
+import zio._
+import java.sql.{Connection, DriverManager}
+
+case class DatabaseLive(connection: Connection) extends Database {
+  override def query(sql: String): Task[ResultSet] =
+    ZIO.attempt(connection.createStatement().executeQuery(sql))
+  
+  override def execute(sql: String): Task[Unit] =
+    ZIO.attempt(connection.createStatement().execute(sql)).unit
+}
+
+object Database {
+  val live: ZLayer[Config, Throwable, Database] =
+    ZLayer.scoped {
+      for {
+        config <- ZIO.service[Config]
+        conn   <- ZIO.acquireRelease(
+                    ZIO.attempt(
+                      DriverManager.getConnection(
+                        s"jdbc:postgresql://${config.host}:${config.port}/mydb"
+                      )
+                    )
+                  )(conn => ZIO.succeed(conn.close()))
+      } yield DatabaseLive(conn)
+    }
+}
+```
+
+The connection is automatically closed when the application shuts down.
+
+## Composing Layers
+
+### Horizontal Composition
+
+Combine independent layers using `++`:
+
+```scala
+val appLayer = 
+  configLayer ++ 
+  loggingLayer ++ 
+  metricsLayer
+```
+
+### Vertical Composition
+
+Compose dependent layers using `>>>`:
+
+```scala
+val appLayer =
+  configLayer >>> 
+  Database.live >>> 
+  UserService.live
+```
+
+ZIO automatically wires the dependencies.
+
+### Combining Both
+
+Combine horizontal and vertical composition:
+
+```scala
+val appLayer =
+  // Base layer
+  configLayer >>>
+  // Dependent layers
+  (Database.live ++ CacheService.live) >>>
+  // Services depending on both
+  (UserService.live ++ ProductService.live)
+```
+
+## Providing Dependencies
+
+### Providing to Routes
+
+Provide dependencies to routes:
+
+```scala
+import zio.http._
+
+object MyApp extends ZIOAppDefault {
+  
+  val routes: Routes[UserService & ProductService, Response] = Routes(
+    Method.GET / "users" / int("id") ->
+      handler { (id: Int, _: Request) =>
+        ZIO.serviceWithZIO[UserService](_.getUser(id))
+          .map(user => Response.json(user.toJson))
+          .orElseFail(Response.notFound)
+      },
+  )
+  
+  val appLayer =
+    Config.live >>> 
+    Database.live >>> 
+    (UserService.live ++ ProductService.live)
+  
+  override val run =
+    Server
+      .serve(routes)
+      .provide(
+        Server.default,
+        appLayer
+      )
+}
+```
+
+### Providing Specific Dependencies
+
+Provide only what's needed:
+
+```scala
+val program =
+  ZIO.serviceWithZIO[UserService](_.getUser(1))
+    .provide(UserService.live, Database.live, Config.live)
+```
+
+## Service Patterns
+
+### Repository Pattern
+
+Separate data access from business logic:
+
+```scala
+// Repository layer - data access
+trait UserRepository {
+  def findById(id: Int): IO[String, Option[User]]
+  def save(user: User): IO[String, Unit]
+  def findByEmail(email: String): IO[String, Option[User]]
+}
+
+case class UserRepositoryLive(db: Database) extends UserRepository {
+  override def findById(id: Int): IO[String, Option[User]] =
+    db.query(s"SELECT * FROM users WHERE id = $id")
+      .map(rs => if (rs.next()) Some(parseUser(rs)) else None)
+      .mapError(_.getMessage)
+  
+  override def save(user: User): IO[String, Unit] =
+    db.execute(s"INSERT INTO users VALUES (...)")
+      .mapError(_.getMessage)
+      .unit
+  
+  override def findByEmail(email: String): IO[String, Option[User]] =
+    db.query(s"SELECT * FROM users WHERE email = '$email'")
+      .map(rs => if (rs.next()) Some(parseUser(rs)) else None)
+      .mapError(_.getMessage)
+}
+
+object UserRepository {
+  val live: ZLayer[Database, Nothing, UserRepository] =
+    ZLayer.fromFunction(UserRepositoryLive.apply _)
+}
+
+// Service layer - business logic
+trait UserService {
+  def register(name: String, email: String): IO[String, User]
+  def getUser(id: Int): IO[String, User]
+}
+
+case class UserServiceLive(repo: UserRepository) extends UserService {
+  
+  override def register(name: String, email: String): IO[String, User] =
+    for {
+      existing <- repo.findByEmail(email)
+      _        <- ZIO.when(existing.isDefined)(
+                    ZIO.fail(s"User with email $email already exists")
+                  )
+      user     = User(id = generateId(), name = name, email = email)
+      _        <- repo.save(user)
+    } yield user
+  
+  override def getUser(id: Int): IO[String, User] =
+    repo.findById(id).flatMap {
+      case Some(user) => ZIO.succeed(user)
+      case None       => ZIO.fail(s"User $id not found")
+    }
+}
+
+object UserService {
+  val live: ZLayer[UserRepository, Nothing, UserService] =
+    ZLayer.fromFunction(UserServiceLive.apply _)
+}
+```
+
+### Caching Pattern
+
+Add caching to services:
+
+```scala
+trait CacheService {
+  def get[A](key: String): UIO[Option[A]]
+  def set[A](key: String, value: A, ttl: Duration): UIO[Unit]
+}
+
+case class CacheServiceLive(ref: Ref[Map[String, (Any, Instant)]]) 
+    extends CacheService {
+  
+  override def get[A](key: String): UIO[Option[A]] =
+    for {
+      now   <- Clock.instant
+      cache <- ref.get
+      result = cache.get(key).collect {
+        case (value, expiry) if expiry.isAfter(now) => value.asInstanceOf[A]
+      }
+    } yield result
+  
+  override def set[A](key: String, value: A, ttl: Duration): UIO[Unit] =
+    Clock.instant.flatMap { now =>
+      ref.update { cache =>
+        cache + (key -> (value, now.plus(ttl)))
+      }
+    }
+}
+
+object CacheService {
+  val live: ULayer[CacheService] =
+    ZLayer.scoped {
+      for {
+        ref <- Ref.make(Map.empty[String, (Any, Instant)])
+        _   <- cleanupExpired(ref)
+                 .repeat(Schedule.spaced(1.minute))
+                 .forkScoped
+      } yield CacheServiceLive(ref)
+    }
+  
+  private def cleanupExpired(ref: Ref[Map[String, (Any, Instant)]]): UIO[Unit] =
+    Clock.instant.flatMap { now =>
+      ref.update { cache =>
+        cache.filter { case (_, (_, expiry)) => expiry.isAfter(now) }
+      }
+    }
+}
+
+// Cached user service
+case class CachedUserService(userService: UserService, cache: CacheService) 
+    extends UserService {
+  
+  override def getUser(id: Int): IO[String, User] =
+    cache.get[User](s"user:$id").flatMap {
+      case Some(user) => ZIO.succeed(user)
+      case None       =>
+        for {
+          user <- userService.getUser(id)
+          _    <- cache.set(s"user:$id", user, 5.minutes)
+        } yield user
+    }
+  
+  override def register(name: String, email: String): IO[String, User] =
+    userService.register(name, email)
+}
+
+object CachedUserService {
+  val live: ZLayer[UserService & CacheService, Nothing, UserService] =
+    ZLayer.fromFunction(CachedUserService.apply _)
+}
+```
+
+## Testing with Layers
+
+### Mock Implementations
+
+Create test implementations:
+
+```scala
+import zio.test._
+
+case class UserServiceTest(users: Ref[Map[Int, User]]) extends UserService {
+  
+  override def getUser(id: Int): IO[String, User] =
+    users.get.flatMap { map =>
+      ZIO.fromOption(map.get(id))
+        .orElseFail(s"User $id not found")
+    }
+  
+  override def createUser(user: User): IO[String, Unit] =
+    users.update(_ + (user.id -> user))
+}
+
+object UserServiceTest {
+  val layer: ULayer[UserService] =
+    ZLayer {
+      Ref.make(Map.empty[Int, User]).map(UserServiceTest(_))
+    }
+}
+```
+
+### Testing Routes
+
+Test routes with mock services:
+
+```scala
+import zio.test._
+import zio.http._
+import zio.http.TestClient
+
+object UserRoutesSpec extends ZIOSpecDefault {
+  
+  val routes: Routes[UserService, Response] = Routes(
+    Method.GET / "users" / int("id") ->
+      handler { (id: Int, _: Request) =>
+        ZIO.serviceWithZIO[UserService](_.getUser(id))
+          .map(user => Response.json(user.toJson))
+          .orElseFail(Response.notFound)
+      },
+  )
+  
+  def spec = suite("UserRoutes")(
+    test("get existing user returns 200") {
+      for {
+        _        <- ZIO.serviceWithZIO[UserService](
+                      _.createUser(User(1, "Alice", "alice@example.com"))
+                    )
+        response <- routes.runZIO(Request.get("/users/1"))
+      } yield assertTrue(response.status == Status.Ok)
+    },
+    
+    test("get non-existent user returns 404") {
+      for {
+        response <- routes.runZIO(Request.get("/users/999"))
+      } yield assertTrue(response.status == Status.NotFound)
+    },
+  ).provide(UserServiceTest.layer)
+}
+```
+
+<Note>
+Using test implementations allows you to test business logic without external dependencies like databases.
+</Note>
+
+## Advanced Patterns
+
+### Environment-Based Configuration
+
+Load different configurations per environment:
+
+```scala
+trait ConfigService {
+  def get[A](key: String): Task[A]
+}
+
+object ConfigService {
+  val live: ZLayer[Any, Throwable, ConfigService] =
+    ZLayer {
+      ZIO.attempt {
+        val env = System.getenv("ENV")
+        env match {
+          case "production" => ProductionConfig()
+          case "staging"    => StagingConfig()
+          case _            => DevelopmentConfig()
+        }
+      }
+    }
+}
+```
+
+### Multi-Tenant Services
+
+Handle multiple tenants:
+
+```scala
+case class Tenant(id: String, name: String)
+
+trait TenantService {
+  def getTenant(id: String): IO[String, Tenant]
+}
+
+case class TenantContext(tenant: Tenant)
+
+// Extract tenant from request
+def extractTenant: HandlerAspect[TenantService, TenantContext] =
+  HandlerAspect.interceptIncomingHandler(
+    Handler.fromFunctionZIO[Request] { request =>
+      val tenantId = request.header(Header.Custom("X-Tenant-ID"))
+        .map(_.renderedValue)
+        .getOrElse("default")
+      
+      ZIO
+        .serviceWithZIO[TenantService](_.getTenant(tenantId))
+        .map(tenant => (request, TenantContext(tenant)))
+        .orElseFail(Response.unauthorized("Invalid tenant"))
+    }
+  )
+
+val routes =
+  Method.GET / "data" ->
+    handler { (_: Request) =>
+      ZIO.serviceWith[TenantContext] { ctx =>
+        Response.text(s"Data for tenant: ${ctx.tenant.name}")
+      }
+    } @@ extractTenant
+```
+
+### Connection Pooling
+
+Manage database connection pools:
+
+```scala
+import javax.sql.DataSource
+import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
+
+case class DatabasePool(dataSource: DataSource) {
+  def withConnection[A](f: Connection => Task[A]): Task[A] =
+    ZIO.acquireReleaseWith(
+      ZIO.attempt(dataSource.getConnection())
+    )(conn => ZIO.succeed(conn.close()))(
+      f
+    )
+}
+
+object DatabasePool {
+  val live: ZLayer[Config, Throwable, DatabasePool] =
+    ZLayer.scoped {
+      for {
+        config <- ZIO.service[Config]
+        hikariConfig = {
+          val hc = new HikariConfig()
+          hc.setJdbcUrl(s"jdbc:postgresql://${config.host}:${config.port}/mydb")
+          hc.setMaximumPoolSize(10)
+          hc
+        }
+        dataSource <- ZIO.acquireRelease(
+                        ZIO.attempt(new HikariDataSource(hikariConfig))
+                      )(ds => ZIO.succeed(ds.close()))
+      } yield DatabasePool(dataSource)
+    }
+}
+```
+
+## Best Practices
+
+<Card title="Keep Layers Focused" icon="target">
+Each layer should have a single responsibility. Separate data access, business logic, and external integrations.
+</Card>
+
+<Card title="Use Interfaces" icon="code">
+Define trait interfaces for services to enable easy testing and multiple implementations.
+</Card>
+
+<Card title="Manage Resources Properly" icon="recycle">
+Use `ZLayer.scoped` and `acquireRelease` for resources that need cleanup.
+</Card>
+
+<Card title="Compose at the Top" icon="layers">
+Compose all layers at the application entry point rather than passing them through handlers.
+</Card>
+
+<Card title="Test with Mock Layers" icon="flask">
+Create test implementations of services for fast, isolated testing.
+</Card>
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+
+// Services
+trait UserService {
+  def getUser(id: Int): IO[String, User]
+  def createUser(user: User): IO[String, Unit]
+}
+
+case class UserServiceLive(db: Database) extends UserService {
+  override def getUser(id: Int): IO[String, User] = ???
+  override def createUser(user: User): IO[String, Unit] = ???
+}
+
+object UserService {
+  val live: ZLayer[Database, Nothing, UserService] =
+    ZLayer.fromFunction(UserServiceLive.apply _)
+}
+
+// Application
+object MyApp extends ZIOAppDefault {
+  
+  val routes: Routes[UserService, Response] = Routes(
+    Method.GET / "users" / int("id") ->
+      handler { (id: Int, _: Request) =>
+        ZIO.serviceWithZIO[UserService](_.getUser(id))
+          .map(user => Response.json(user.toJson))
+          .orElseFail(Response.notFound)
+      },
+    
+    Method.POST / "users" ->
+      handler { (request: Request) =>
+        for {
+          user <- request.body.to[User]
+                    .orElseFail(Response.badRequest)
+          _    <- ZIO.serviceWithZIO[UserService](_.createUser(user))
+                    .orElseFail(Response.internalServerError)
+        } yield Response.ok
+      },
+  )
+  
+  val appLayer =
+    Config.live >>> 
+    Database.live >>> 
+    UserService.live
+  
+  override val run =
+    Server
+      .serve(routes)
+      .provide(
+        Server.default,
+        appLayer
+      )
+}
+```
+
+## Next Steps
+
+- Learn about [Authentication](/guides/authentication) to manage auth services with layers
+- Explore [Error Handling](/guides/error-handling) to handle service errors
+- Read about [Testing](/testing) to write comprehensive tests with mock layers

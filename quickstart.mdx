@@ -1,80 +1,337 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Build your first HTTP server with ZIO HTTP in minutes
 ---
 
-## Get started in three steps
+This guide will walk you through creating a simple HTTP server and client with ZIO HTTP. You'll learn the basics of routing, handlers, and how to test your endpoints.
 
-Get your documentation site running locally and make your first customization.
+## Your First Server
 
-### Step 1: Set up your local environment
+Let's create a greeting server with two routes: a root endpoint and a personalized greeting endpoint.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
 
-### Step 2: Deploy your changes
+<Step title="Create the Server">
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Create a new Scala file and add the following code:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```scala
+import zio._
+import zio.http._
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+object GreetingServer extends ZIOAppDefault {
+  val routes =
+    Routes(
+      Method.GET / Root -> handler(Response.text("Greetings at your service")),
+      Method.GET / "greet" -> handler { (req: Request) =>
+        val name = req.queryOrElse[String]("name", "World")
+        Response.text(s"Hello $name!")
+      }
+    )
 
-### Step 3: Go live
+  def run = Server.serve(routes).provide(Server.default)
+}
+```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+This server defines two routes:
+- `GET /` - Returns a welcome message
+- `GET /greet?name=<name>` - Returns a personalized greeting
 
-## Next steps
+</Step>
 
-Now that you have your docs running, explore these key features:
+<Step title="Run the Server">
+
+Start your server using your build tool:
+
+<CodeGroup>
+
+```bash sbt
+sbt "runMain GreetingServer"
+```
+
+```bash Maven
+mvn compile exec:java -Dexec.mainClass="GreetingServer"
+```
+
+```bash Gradle
+gradle run
+```
+
+</CodeGroup>
+
+The server will start on `http://localhost:8080` by default.
+
+</Step>
+
+<Step title="Test the Endpoints">
+
+Open a new terminal and test your endpoints:
+
+```bash
+# Test the root endpoint
+curl http://localhost:8080/
+# Output: Greetings at your service
+
+# Test the greeting endpoint
+curl http://localhost:8080/greet?name=John
+# Output: Hello John!
+
+# Test with default name
+curl http://localhost:8080/greet
+# Output: Hello World!
+```
+
+</Step>
+
+</Steps>
+
+## Creating a Client
+
+Now let's create a client to interact with the server programmatically:
+
+```scala
+import zio._
+import zio.http._
+
+object GreetingClient extends ZIOAppDefault {
+
+  val app =
+    for {
+      client   <- ZIO.serviceWith[Client](_.host("localhost").port(8080))
+      request  =  Request.get("greet").addQueryParam("name", "John")
+      response <- client.batched(request)
+      _        <- response.body.asString.debug("Response")
+    } yield ()
+
+  def run = app.provide(Client.default)
+}
+```
+
+<Note>
+Make sure your `GreetingServer` is running before executing the client!
+</Note>
+
+Run the client:
+
+```bash
+sbt "runMain GreetingClient"
+```
+
+You should see output similar to:
+
+```
+Response: Hello John!
+```
+
+## Understanding the Code
+
+Let's break down the key concepts:
+
+### Routes
+
+Routes define the mapping between HTTP requests and handlers:
+
+```scala
+val routes = Routes(
+  Method.GET / Root -> handler(Response.text("Hello")),
+  Method.GET / "users" / int("id") -> handler { (id: Int, req: Request) =>
+    Response.text(s"User $id")
+  }
+)
+```
+
+### Handlers
+
+Handlers process requests and return responses:
+
+```scala
+// Simple handler
+handler(Response.text("Static response"))
+
+// Handler with request access
+handler { (req: Request) =>
+  val param = req.queryOrElse[String]("key", "default")
+  Response.text(s"Param: $param")
+}
+
+// Handler with path parameters
+handler { (id: Int, req: Request) =>
+  Response.text(s"ID: $id")
+}
+```
+
+### Responses
+
+Create different types of responses:
+
+```scala
+// Text response
+Response.text("Hello World!")
+
+// JSON response
+Response.json("""{"message": "Hello"}""")
+
+// Status code response
+Response.status(Status.NotFound)
+
+// Response with headers
+Response.text("Hello").addHeader(Header.ContentType(MediaType.text.plain))
+```
+
+## A More Complete Example
+
+Here's a more realistic example with multiple routes and JSON handling:
+
+```scala
+import zio._
+import zio.http._
+
+object HelloWorld extends ZIOAppDefault {
+  // Responds with plain text
+  val homeRoute =
+    Method.GET / Root -> handler(Response.text("Hello World!"))
+
+  // Responds with JSON
+  val jsonRoute =
+    Method.GET / "json" -> handler(Response.json("""{"greetings": "Hello World!"}"""))
+
+  // Create HTTP route
+  val app = Routes(homeRoute, jsonRoute)
+
+  // Run it like any simple app
+  override val run = Server.serve(app).provide(Server.default)
+}
+```
+
+## Configuration Options
+
+### Custom Port
+
+Change the default port (8080) by providing a custom server configuration:
+
+```scala
+import zio.http._
+
+val config = Server.Config.default.port(9000)
+
+Server.serve(routes).provide(Server.live(config))
+```
+
+### Server with Multiple Settings
+
+Configure various server options:
+
+```scala
+val config = Server.Config.default
+  .port(9000)
+  .ssl(sslConfig)
+  .maxHeaderSize(8192)
+
+Server.serve(routes).provide(Server.live(config))
+```
+
+## Common Patterns
+
+### Query Parameters
+
+Extract query parameters from requests:
+
+```scala
+Method.GET / "search" -> handler { (req: Request) =>
+  val query = req.queryOrElse[String]("q", "")
+  val page = req.queryOrElse[Int]("page", 1)
+  Response.text(s"Searching for: $query, page: $page")
+}
+```
+
+### Path Parameters
+
+Use path parameters with type safety:
+
+```scala
+Method.GET / "users" / int("userId") -> handler { (userId: Int, req: Request) =>
+  Response.text(s"User ID: $userId")
+}
+
+Method.GET / "posts" / string("slug") -> handler { (slug: String, req: Request) =>
+  Response.text(s"Post: $slug")
+}
+```
+
+### Request Body
+
+Handle request bodies:
+
+```scala
+Method.POST / "users" -> handler { (req: Request) =>
+  for {
+    body <- req.body.asString
+    _    <- Console.printLine(s"Received: $body")
+  } yield Response.text("User created")
+}
+```
+
+## Error Handling
+
+Handle errors gracefully in your routes:
+
+```scala
+Method.GET / "risky" -> handler {
+  ZIO.attempt {
+    // Some operation that might fail
+    throw new RuntimeException("Something went wrong")
+  }.catchAll { error =>
+    ZIO.succeed(Response.text(error.getMessage).status(Status.InternalServerError))
+  }
+}
+```
+
+## Testing Your Server
+
+ZIO HTTP provides a testkit for testing without a live server. Add the dependency:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http-testkit" % "3.3.2" % Test
+```
+
+Then write tests:
+
+```scala
+import zio.test._
+import zio.http._
+
+object GreetingServerSpec extends ZIOSpecDefault {
+  def spec = suite("GreetingServer")(
+    test("root endpoint returns greeting") {
+      val request = Request.get(URL.root)
+      val response = routes.run(request)
+      
+      for {
+        res <- response
+        body <- res.body.asString
+      } yield assertTrue(body == "Greetings at your service")
+    }
+  )
+}
+```
+
+## Next Steps
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Routing" icon="route" href="/routing">
+    Learn advanced routing patterns and path parameters
+  </Card>
+  <Card title="Middleware" icon="layer-group" href="/middleware">
+    Add cross-cutting concerns like logging and authentication
+  </Card>
+  <Card title="WebSockets" icon="plug" href="/websockets">
+    Build real-time applications with WebSocket support
+  </Card>
+  <Card title="Endpoints" icon="diagram-project" href="/endpoints">
+    Use type-safe declarative endpoints
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+**Want to see more examples?** Check out the [ZIO HTTP examples](https://github.com/zio/zio-http/tree/main/zio-http-example) directory for authentication, streaming, middleware, and more!
 </Note>

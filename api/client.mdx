@@ -1,0 +1,199 @@
+---
+title: Client API
+description: API reference for the ZIO HTTP Client type
+---
+
+The `ZClient` type represents an HTTP client for making requests to HTTP servers.
+
+## Type Signature
+
+```scala
+final case class ZClient[
+  -Env,
+  ReqEnv,
+  -In,
+  +Err,
+  +Out
+](
+  version: Version,
+  url: URL,
+  headers: Headers,
+  sslConfig: Option[ClientSSLConfig],
+  proxy: Option[Proxy],
+  bodyEncoder: ZClient.BodyEncoder[Env, Err, In],
+  bodyDecoder: ZClient.BodyDecoder[Env, Err, Out],
+  driver: ZClient.Driver[Env, ReqEnv, Err]
+)
+```
+
+## Creating Clients
+
+### Client.default
+
+```scala
+val default: ZLayer[Any, Throwable, Client]
+```
+
+Creates a client with default configuration.
+
+**Example:**
+```scala
+val app = ZIO.serviceWithZIO[Client] { client =>
+  client(Request.get("https://api.example.com/users"))
+}
+
+app.provide(Client.default)
+```
+
+## Client Operations
+
+### apply (request execution)
+
+```scala
+def apply(request: Request)(implicit trace: Trace): ZIO[Env & ReqEnv, Err, Out]
+```
+
+Executes an HTTP request.
+
+<ParamField path="request" type="Request" required>
+  The HTTP request to execute
+</ParamField>
+
+<ResponseField name="return" type="ZIO[Env & ReqEnv, Err, Out]">
+  Effect producing the response
+</ResponseField>
+
+### batched
+
+```scala
+def batched(request: Request)(implicit trace: Trace): ZIO[Env & ReqEnv, Err, Out]
+```
+
+Executes a batched request (connection pooling).
+
+### request
+
+```scala
+def request(request: Request)(implicit trace: Trace): ZIO[Env & ReqEnv, Err, Out]
+```
+
+Alias for `apply`.
+
+## URL Building
+
+### host
+
+```scala
+def host(host: String): ZClient[Env, ReqEnv, In, Err, Out]
+```
+
+Sets the host.
+
+### port
+
+```scala
+def port(port: Int): ZClient[Env, ReqEnv, In, Err, Out]
+```
+
+Sets the port.
+
+### addPath
+
+```scala
+def addPath(path: String): ZClient[Env, ReqEnv, In, Err, Out]
+def addPath(path: Path): ZClient[Env, ReqEnv, In, Err, Out]
+```
+
+Adds path segments.
+
+### addQueryParam
+
+```scala
+def addQueryParam(key: String, value: String): ZClient[Env, ReqEnv, In, Err, Out]
+```
+
+Adds a query parameter.
+
+## Header Operations
+
+### addHeader
+
+```scala
+def addHeader(header: Header): ZClient[Env, ReqEnv, In, Err, Out]
+def addHeader(name: String, value: String): ZClient[Env, ReqEnv, In, Err, Out]
+```
+
+Adds a header.
+
+### addHeaders
+
+```scala
+def addHeaders(headers: Headers): ZClient[Env, ReqEnv, In, Err, Out]
+```
+
+Adds multiple headers.
+
+## Configuration
+
+### ssl
+
+```scala
+def ssl(sslConfig: ClientSSLConfig): ZClient[Env, ReqEnv, In, Err, Out]
+```
+
+Sets SSL configuration.
+
+### proxy
+
+```scala
+def proxy(proxy: Proxy): ZClient[Env, ReqEnv, In, Err, Out]
+```
+
+Sets proxy configuration.
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+
+object ClientExample extends ZIOAppDefault {
+  val app = for {
+    client <- ZIO.service[Client]
+    
+    // Configure client
+    apiClient = client
+      .host("api.example.com")
+      .port(443)
+      .ssl(ClientSSLConfig.Default)
+      .addHeader("Authorization", "Bearer token")
+    
+    // Make request
+    response <- apiClient.batched(
+      Request.get("/users/123")
+    )
+    
+    body <- response.body.asString
+    _    <- Console.printLine(body)
+  } yield ()
+  
+  def run = app.provide(Client.default)
+}
+```
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Client Overview" href="/client/overview">
+    Client concepts and usage
+  </Card>
+  <Card title="Making Requests" href="/client/making-requests">
+    How to make HTTP requests
+  </Card>
+  <Card title="Configuration" href="/client/configuration">
+    Client configuration options
+  </Card>
+  <Card title="Request" href="/api/request">
+    Request API reference
+  </Card>
+</CardGroup>

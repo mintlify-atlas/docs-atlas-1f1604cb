@@ -1,0 +1,700 @@
+---
+title: URL
+description: API reference for the URL type in ZIO HTTP
+---
+
+## Overview
+
+`URL` represents a Uniform Resource Locator with support for both absolute and relative URLs. It provides a rich API for parsing, manipulating, and encoding URLs.
+
+```scala
+final case class URL(
+  path: Path,
+  kind: URL.Location = URL.Location.Relative,
+  queryParams: QueryParams = QueryParams.empty,
+  fragment: Option[Fragment] = None
+) extends URLPlatformSpecific with QueryOps[URL]
+```
+
+<ParamField path="path" type="Path" required>
+  The path component of the URL
+</ParamField>
+
+<ParamField path="kind" type="URL.Location" default="URL.Location.Relative">
+  Location type: absolute (with scheme/host/port) or relative
+</ParamField>
+
+<ParamField path="queryParams" type="QueryParams" default="QueryParams.empty">
+  Query parameters
+</ParamField>
+
+<ParamField path="fragment" type="Option[Fragment]" default="None">
+  Fragment identifier (the part after `#`)
+</ParamField>
+
+## Creating URLs
+
+### Empty and Root URLs
+
+```scala
+val empty: URL = URL.empty
+val root: URL = URL.root
+```
+
+```scala
+URL.empty  // URL with empty path
+URL.root   // URL with root path "/"
+```
+
+### From String
+
+```scala
+def decode(rawUrl: String): Either[MalformedURLException, URL]
+```
+
+<ParamField path="rawUrl" type="String" required>
+  The URL string to parse
+</ParamField>
+
+<ResponseField name="result" type="Either[MalformedURLException, URL]">
+  Returns `Right(url)` if valid, `Left(exception)` if malformed
+</ResponseField>
+
+```scala
+val url1 = URL.decode("https://example.com/api/users?page=1")
+// Right(URL(...))
+
+val url2 = URL.decode("/relative/path?key=value")
+// Right(URL(...))
+
+val invalid = URL.decode("not a url")
+// Left(MalformedURLException)
+```
+
+### From URI
+
+```scala
+def fromURI(uri: URI): Option[URL]
+def fromAbsoluteURI(uri: URI): Option[URL]
+def fromRelativeURI(uri: URI): Option[URL]
+```
+
+<ParamField path="uri" type="java.net.URI" required>
+  Java URI object
+</ParamField>
+
+```scala
+import java.net.URI
+
+val uri = new URI("https://example.com/path")
+val url = URL.fromURI(uri)
+// Some(URL(...))
+```
+
+### From Config
+
+```scala
+def config: Config[URL]
+```
+
+ZIO Config decoder for URLs.
+
+```scala
+import zio.config._
+
+val config: Config[URL] = URL.config
+```
+
+## URL Components
+
+### Scheme
+
+```scala
+def scheme: Option[Scheme]
+def scheme(scheme: Scheme): URL
+```
+
+<ParamField path="scheme" type="Scheme" required>
+  HTTP scheme (HTTP or HTTPS)
+</ParamField>
+
+```scala
+val url = URL.decode("https://example.com").toOption.get
+url.scheme  // Some(Scheme.HTTPS)
+
+val updated = url.scheme(Scheme.HTTP)
+// Changes scheme to HTTP
+```
+
+### Host
+
+```scala
+def host: Option[String]
+def host(host: String): URL
+def hostPort: Option[String]
+```
+
+<ParamField path="host" type="String" required>
+  Hostname or IP address
+</ParamField>
+
+<ResponseField name="hostPort" type="Option[String]">
+  Returns host with port if non-default port is specified
+</ResponseField>
+
+```scala
+val url = URL.decode("https://example.com:8080").toOption.get
+url.host      // Some("example.com")
+url.hostPort  // Some("example.com:8080")
+
+val withHost = URL.empty.host("api.example.com")
+```
+
+### Port
+
+```scala
+def port: Option[Int]
+def port(port: Int): URL
+def portOrDefault: Option[Int]
+def portIfNotDefault: Option[Int]
+```
+
+<ParamField path="port" type="Int" required>
+  Port number
+</ParamField>
+
+<ResponseField name="port" type="Option[Int]">
+  Returns explicitly set port
+</ResponseField>
+
+<ResponseField name="portOrDefault" type="Option[Int]">
+  Returns port or default port for the scheme
+</ResponseField>
+
+<ResponseField name="portIfNotDefault" type="Option[Int]">
+  Returns port only if it's not the default for the scheme
+</ResponseField>
+
+```scala
+val url1 = URL.decode("https://example.com:8080").toOption.get
+url1.port              // Some(8080)
+url1.portOrDefault     // Some(8080)
+url1.portIfNotDefault  // Some(8080)
+
+val url2 = URL.decode("https://example.com").toOption.get
+url2.port              // None
+url2.portOrDefault     // Some(443) (HTTPS default)
+url2.portIfNotDefault  // None
+```
+
+### Path
+
+```scala
+def path: Path
+def path(path: Path): URL
+def path(path: String): URL
+def addPath(path: Path): URL
+def addPath(path: String): URL
+```
+
+<ParamField path="path" type="Path | String" required>
+  Path to set or append
+</ParamField>
+
+```scala
+val url = URL.root
+  .path("/api/users")
+// URL with path "/api/users"
+
+val extended = url.addPath("/123")
+// URL with path "/api/users/123"
+
+val fromString = url.addPath("comments")
+// URL with path "/api/users/comments"
+```
+
+### Path Manipulation
+
+```scala
+def /(segment: String): URL
+def addLeadingSlash: URL
+def addTrailingSlash: URL
+def dropLeadingSlash: URL
+def dropTrailingSlash: URL
+```
+
+<ParamField path="segment" type="String" required>
+  Path segment to append
+</ParamField>
+
+```scala
+val url = URL.root / "api" / "v1" / "users"
+// URL with path "/api/v1/users"
+
+val withTrailing = url.addTrailingSlash
+// URL with path "/api/v1/users/"
+
+val withoutLeading = url.dropLeadingSlash
+// URL with path "api/v1/users"
+```
+
+### Query Parameters
+
+```scala
+def queryParameters: QueryParams
+def addQueryParams(queryParams: QueryParams): URL
+```
+
+Inherited from `QueryOps[URL]`, providing full query parameter manipulation.
+
+```scala
+val url = URL.root / "search"
+val withParams = url
+  .addQueryParams(QueryParams("q" -> "zio", "page" -> "1"))
+// URL: "/search?q=zio&page=1"
+
+// Using QueryOps methods
+val updated = url
+  .setQueryParam("q", "scala")
+  .addQueryParam("sort", "date")
+```
+
+### Fragment
+
+```scala
+def fragment: Option[Fragment]
+```
+
+<ResponseField name="fragment" type="Option[Fragment]">
+  The fragment identifier (anchor)
+</ResponseField>
+
+```scala
+val url = URL.decode("https://example.com/page#section").toOption.get
+url.fragment  // Some(Fragment(...))
+```
+
+## Location Types
+
+### Relative Location
+
+```scala
+case object Relative extends Location
+```
+
+Represents a relative URL without scheme or host.
+
+```scala
+val relative = URL(
+  path = Path("/api/users"),
+  kind = URL.Location.Relative
+)
+```
+
+### Absolute Location
+
+```scala
+final case class Absolute(
+  scheme: Scheme, 
+  host: String, 
+  originalPort: Option[Int]
+) extends Location
+```
+
+<ParamField path="scheme" type="Scheme" required>
+  HTTP or HTTPS
+</ParamField>
+
+<ParamField path="host" type="String" required>
+  Hostname or IP address
+</ParamField>
+
+<ParamField path="originalPort" type="Option[Int]">
+  Explicit port number
+</ParamField>
+
+```scala
+val absolute = URL(
+  path = Path("/api"),
+  kind = URL.Location.Absolute(
+    scheme = Scheme.HTTPS,
+    host = "api.example.com",
+    originalPort = Some(8080)
+  )
+)
+```
+
+## URL Operations
+
+### Combining URLs
+
+```scala
+def ++(that: URL): URL
+```
+
+<ParamField path="that" type="URL" required>
+  URL to combine
+</ParamField>
+
+<ResponseField name="result" type="URL">
+  Right-biased combination. Merges paths and query params, prefers `that` for location and fragment.
+</ResponseField>
+
+```scala
+val base = URL.decode("https://api.example.com/v1").toOption.get
+val suffix = URL.decode("/users?active=true").toOption.get
+val combined = base ++ suffix
+// https://api.example.com/v1/users?active=true
+```
+
+### Absolute/Relative Conversion
+
+```scala
+def absolute(host: String): URL
+def absolute(scheme: Scheme, host: String, port: Int): URL
+def relative: URL
+def isAbsolute: Boolean
+def isRelative: Boolean
+```
+
+<ParamField path="scheme" type="Scheme" required>
+  HTTP scheme
+</ParamField>
+
+<ParamField path="host" type="String" required>
+  Hostname
+</ParamField>
+
+<ParamField path="port" type="Int">
+  Port number
+</ParamField>
+
+```scala
+val relative = URL.root / "api"
+val absolute = relative.absolute("example.com")
+// http://example.com/api
+
+val withScheme = relative.absolute(Scheme.HTTPS, "example.com", 443)
+// https://example.com:443/api
+
+val backToRelative = absolute.relative
+// /api
+```
+
+### Normalization
+
+```scala
+def normalize: URL
+```
+
+<ResponseField name="result" type="URL">
+  Normalized URL with consistent path and query parameter ordering
+</ResponseField>
+
+```scala
+val url = URL.decode("/./api/../users/").toOption.get
+val normalized = url.normalize
+// Removes dot segments and normalizes structure
+```
+
+### Encoding
+
+```scala
+def encode: String
+def toJavaURI: java.net.URI
+```
+
+<ResponseField name="encode" type="String">
+  URL-encoded string representation
+</ResponseField>
+
+<ResponseField name="toJavaURI" type="java.net.URI">
+  Java URI representation
+</ResponseField>
+
+```scala
+val url = URL.root / "search"
+  .addQueryParams(QueryParams("q" -> "hello world"))
+val encoded = url.encode
+// "/search?q=hello+world"
+
+val javaUri = url.toJavaURI
+```
+
+### Relative Resolution (RFC 3986)
+
+```scala
+def resolve(reference: URL): Either[String, URL]
+```
+
+<ParamField path="reference" type="URL" required>
+  Reference URL to resolve relative to this base URL
+</ParamField>
+
+<ResponseField name="result" type="Either[String, URL]">
+  Resolved target URL or error message
+</ResponseField>
+
+Implements RFC 3986 § 5.2 relative resolution.
+
+```scala
+val base = URL.decode("https://example.com/api/v1/users").toOption.get
+
+val ref1 = URL.decode("../orders").toOption.get
+base.resolve(ref1)
+// Right(https://example.com/api/v1/orders)
+
+val ref2 = URL.decode("123").toOption.get
+base.resolve(ref2)
+// Right(https://example.com/api/v1/123)
+
+val ref3 = URL.decode("/absolute/path").toOption.get
+base.resolve(ref3)
+// Right(https://example.com/absolute/path)
+```
+
+## Fragment
+
+```scala
+final case class Fragment private (raw: String, decoded: String)
+```
+
+<ParamField path="raw" type="String" required>
+  URL-encoded fragment
+</ParamField>
+
+<ParamField path="decoded" type="String" required>
+  Decoded fragment text
+</ParamField>
+
+```scala
+val url = URL.decode("https://example.com/page#section-1").toOption.get
+url.fragment.map(_.decoded)  // Some("section-1")
+url.fragment.map(_.raw)       // Some("section-1")
+```
+
+## Type Signature
+
+```scala
+package zio.http
+
+import java.net.{MalformedURLException, URI}
+import zio.Config
+
+final case class URL(
+  path: Path,
+  kind: URL.Location = URL.Location.Relative,
+  queryParams: QueryParams = QueryParams.empty,
+  fragment: Option[Fragment] = None
+) extends URLPlatformSpecific with QueryOps[URL] {
+  
+  def ++(that: URL): URL
+  def /(segment: String): URL
+  def absolute(host: String): URL
+  def absolute(scheme: Scheme, host: String, port: Int): URL
+  def addLeadingSlash: URL
+  def addPath(path: Path): URL
+  def addPath(path: String): URL
+  def addQueryParams(queryParams: QueryParams): URL
+  def addTrailingSlash: URL
+  def dropLeadingSlash: URL
+  def dropTrailingSlash: URL
+  def encode: String
+  def host: Option[String]
+  def host(host: String): URL
+  def hostPort: Option[String]
+  def isAbsolute: Boolean
+  def isRelative: Boolean
+  def normalize: URL
+  def path(path: Path): URL
+  def path(path: String): URL
+  def port(port: Int): URL
+  def port: Option[Int]
+  def portOrDefault: Option[Int]
+  def portIfNotDefault: Option[Int]
+  def queryParameters: QueryParams
+  def relative: URL
+  def resolve(reference: URL): Either[String, URL]
+  def scheme: Option[Scheme]
+  def scheme(scheme: Scheme): URL
+  def toJavaURI: java.net.URI
+  def updateQueryParams(f: QueryParams => QueryParams): URL
+}
+
+object URL {
+  val empty: URL
+  val root: URL
+  
+  def decode(rawUrl: String): Either[MalformedURLException, URL]
+  def fromURI(uri: URI): Option[URL]
+  def config: Config[URL]
+  
+  sealed trait Location {
+    def ++(that: Location): Location
+    def isAbsolute: Boolean
+    def isRelative: Boolean
+  }
+  
+  object Location {
+    final case class Absolute(
+      scheme: Scheme, 
+      host: String, 
+      originalPort: Option[Int]
+    ) extends Location {
+      def portOrDefault: Option[Int]
+      def portIfNotDefault: Option[Int]
+      def port: Int
+    }
+    
+    case object Relative extends Location
+  }
+  
+  final case class Fragment private (raw: String, decoded: String)
+}
+```
+
+## Examples
+
+### Building URLs
+
+```scala
+import zio.http._
+
+// Simple relative URL
+val api = URL.root / "api" / "v1" / "users"
+// "/api/v1/users"
+
+// With query parameters
+val search = URL.root / "search"
+  .addQueryParams(QueryParams(
+    "q" -> "zio http",
+    "page" -> "1",
+    "limit" -> "10"
+  ))
+// "/search?q=zio+http&page=1&limit=10"
+
+// Absolute URL
+val absolute = URL.root
+  .absolute(Scheme.HTTPS, "api.example.com", 443)
+  .addPath("/v1/users")
+// "https://api.example.com/v1/users"
+```
+
+### Parsing URLs
+
+```scala
+import zio.http._
+
+val result = URL.decode("https://api.example.com:8080/v1/users?active=true#top")
+
+result match {
+  case Right(url) =>
+    println(s"Scheme: ${url.scheme}")      // Some(HTTPS)
+    println(s"Host: ${url.host}")          // Some(api.example.com)
+    println(s"Port: ${url.port}")          // Some(8080)
+    println(s"Path: ${url.path}")          // /v1/users
+    println(s"Query: ${url.queryParameters}") // active=true
+    println(s"Fragment: ${url.fragment}")  // Some(Fragment(...))
+    
+  case Left(error) =>
+    println(s"Invalid URL: ${error.getMessage}")
+}
+```
+
+### Client Requests
+
+```scala
+import zio.http._
+import zio.http.netty.NettyClient
+
+val program = for {
+  url <- ZIO.fromEither(
+    URL.decode("https://api.github.com/users/zio")
+  )
+  response <- Client.request(
+    Request(
+      method = Method.GET,
+      url = url,
+      headers = Headers(
+        Header.Accept(MediaType.application.json)
+      )
+    )
+  )
+  body <- response.body.asString
+  _ <- Console.printLine(body)
+} yield ()
+```
+
+### URL Manipulation
+
+```scala
+import zio.http._
+
+val base = URL.decode("https://api.example.com/v1").toOption.get
+
+// Add path segments
+val users = base / "users" / "123"
+// https://api.example.com/v1/users/123
+
+// Add query parameters
+val filtered = users
+  .addQueryParam("include", "profile")
+  .addQueryParam("fields", "name,email")
+// https://api.example.com/v1/users/123?include=profile&fields=name,email
+
+// Convert to relative
+val relative = filtered.relative
+// /v1/users/123?include=profile&fields=name,email
+```
+
+### Relative Resolution
+
+```scala
+import zio.http._
+
+val base = URL.decode("https://example.com/api/v1/users/123").toOption.get
+
+// Resolve relative references
+val ordersRef = URL.decode("../orders").toOption.get
+base.resolve(ordersRef)
+// Right(https://example.com/api/v1/orders)
+
+val commentsRef = URL.decode("comments").toOption.get
+base.resolve(commentsRef)
+// Right(https://example.com/api/v1/users/comments)
+
+val absoluteRef = URL.decode("/other/path").toOption.get
+base.resolve(absoluteRef)
+// Right(https://example.com/other/path)
+```
+
+### Building API Clients
+
+```scala
+import zio.http._
+
+class GitHubClient(baseUrl: URL) {
+  def getUser(username: String): ZIO[Client, Throwable, Response] = {
+    val url = baseUrl / "users" / username
+    Client.request(
+      Request(method = Method.GET, url = url)
+    )
+  }
+  
+  def searchRepos(
+    query: String, 
+    page: Int = 1
+  ): ZIO[Client, Throwable, Response] = {
+    val url = baseUrl / "search" / "repositories"
+      .addQueryParam("q", query)
+      .addQueryParam("page", page.toString)
+    Client.request(
+      Request(method = Method.GET, url = url)
+    )
+  }
+}
+
+val client = new GitHubClient(
+  URL.decode("https://api.github.com").toOption.get
+)
+```

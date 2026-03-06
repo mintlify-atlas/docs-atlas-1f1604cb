@@ -1,0 +1,505 @@
+---
+title: "Error Handling"
+description: "Master error handling in ZIO HTTP using typed errors, error channels, and custom error responses"
+---
+
+ZIO HTTP provides powerful error handling mechanisms through ZIO's type-safe error channel. This guide covers patterns for handling errors gracefully in your HTTP applications.
+
+## Understanding Error Channels
+
+In ZIO HTTP, handlers have the type `Handler[R, Err, In, Out]` where:
+- `R` - Environment/dependencies required
+- `Err` - Error type
+- `In` - Input type (typically `Request`)
+- `Out` - Output type (typically `Response`)
+
+The `Err` type parameter represents the error channel, allowing compile-time error tracking.
+
+## Basic Error Handling
+
+### Converting Errors to Responses
+
+The simplest approach is using `Response` as the error type:
+
+```scala
+import zio._
+import zio.http._
+
+val safeRoute = 
+  Method.GET / "user" / int("id") ->
+    handler { (id: Int, _: Request) =>
+      if (id <= 0)
+        ZIO.fail(Response.badRequest("Invalid user ID"))
+      else
+        ZIO.succeed(Response.text(s"User $id"))
+    }
+```
+
+When the error type is `Response`, ZIO HTTP automatically uses it as the HTTP response.
+
+### Using orElseFail
+
+Convert ZIO failures to Response errors:
+
+```scala
+case class User(id: Int, name: String)
+
+object UserRepo {
+  def find(id: Int): IO[String, User] =
+    if (id == 1) ZIO.succeed(User(1, "Alice"))
+    else ZIO.fail(s"User $id not found")
+}
+
+val route =
+  Method.GET / "users" / int("id") ->
+    handler { (id: Int, _: Request) =>
+      UserRepo
+        .find(id)
+        .map(user => Response.json(user.toJson))
+        .orElseFail(Response.notFound(s"User $id not found"))
+    }
+```
+
+## Typed Error Handling
+
+### Multiple Error Types with Either
+
+Handle different error types using `Either`:
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+import zio.http.codec._
+import zio.http.endpoint.{Endpoint, AuthType}
+
+case class Book(title: String, authors: List[String])
+object Book {
+  implicit val schema: Schema[Book] = DeriveSchema.gen
+}
+
+case class BookNotFound(message: String, bookId: Int)
+object BookNotFound {
+  implicit val schema: Schema[BookNotFound] = DeriveSchema.gen
+}
+
+case class AuthenticationError(message: String, userId: Int)
+object AuthenticationError {
+  implicit val schema: Schema[AuthenticationError] = DeriveSchema.gen
+}
+
+object BookRepo {
+  def find(id: Int): ZIO[Any, BookNotFound, Book] = {
+    if (id == 1)
+      ZIO.succeed(Book("Zionomicon", List("John A. De Goes", "Adam Fraser")))
+    else
+      ZIO.fail(BookNotFound("The requested book was not found.", id))
+  }
+}
+
+val endpoint: Endpoint[
+  Int,
+  (Int, Header.Authorization),
+  Either[AuthenticationError, BookNotFound],
+  Book,
+  AuthType.None
+] =
+  Endpoint(RoutePattern.GET / "books" / PathCodec.int("id"))
+    .header(HeaderCodec.authorization)
+    .out[Book]
+    .outError[BookNotFound](Status.NotFound)
+    .outError[AuthenticationError](Status.Unauthorized)
+
+def isUserAuthorized(authHeader: Header.Authorization): Boolean = false
+
+val getBookHandler: Handler[
+  Any,
+  Either[AuthenticationError, BookNotFound],
+  (Int, Header.Authorization),
+  Book
+] =
+  handler { (id: Int, authHeader: Header.Authorization) =>
+    if (isUserAuthorized(authHeader))
+      BookRepo.find(id).mapError(Right(_))
+    else
+      ZIO.fail(Left(AuthenticationError("User is not authenticated", 123)))
+  }
+
+val routes = endpoint.implementHandler(getBookHandler).toRoutes
+```
+
+This approach:
+- Uses `Either` to represent multiple error types
+- Maps each error type to appropriate HTTP status codes
+- Provides type-safe error handling at compile time
+
+<Info>
+The Endpoint API automatically serializes errors to JSON based on their schemas and returns appropriate status codes.
+</Info>
+
+## Error Recovery Patterns
+
+### Fallback Values
+
+Provide default values when operations fail:
+
+```scala
+val route =
+  Method.GET / "config" / "theme" ->
+    handler { (_: Request) =>
+      ConfigService
+        .getTheme
+        .map(theme => Response.text(theme))
+        .catchAll(_ => ZIO.succeed(Response.text("default")))
+    }
+```
+
+### Retry Logic
+
+Retry failed operations with exponential backoff:
+
+```scala
+import zio.http._
+
+val route =
+  Method.GET / "external" / "data" ->
+    handler { (_: Request) =>
+      ExternalService
+        .fetchData
+        .map(data => Response.json(data))
+        .retry(Schedule.exponential(1.second) && Schedule.recurs(3))
+        .orElseFail(Response.serviceUnavailable("Service temporarily unavailable"))
+    }
+```
+
+### Timeout Handling
+
+Set timeouts for long-running operations:
+
+```scala
+val route =
+  Method.GET / "slow" / "operation" ->
+    handler { (_: Request) =>
+      SlowService
+        .compute
+        .map(result => Response.text(result))
+        .timeout(5.seconds)
+        .map(_.getOrElse(Response.requestTimeout("Operation timed out")))
+    }
+```
+
+## Custom Error Types
+
+### Domain-Specific Errors
+
+Define custom error types for your domain:
+
+```scala
+sealed trait AppError
+object AppError {
+  case class ValidationError(field: String, message: String) extends AppError
+  case class NotFound(resource: String, id: String) extends AppError
+  case class Unauthorized(message: String) extends AppError
+  case class InternalError(cause: Throwable) extends AppError
+  
+  // Convert domain errors to HTTP responses
+  def toResponse(error: AppError): Response = error match {
+    case ValidationError(field, message) =>
+      Response.badRequest(s"Validation failed for $field: $message")
+    case NotFound(resource, id) =>
+      Response.notFound(s"$resource with id $id not found")
+    case Unauthorized(message) =>
+      Response.unauthorized(message)
+    case InternalError(cause) =>
+      Response.internalServerError(s"Internal error: ${cause.getMessage}")
+  }
+}
+```
+
+### Error Middleware
+
+Create middleware to handle errors consistently:
+
+```scala
+import zio.http._
+
+def errorHandler[R]: HandlerAspect[R, Unit] =
+  HandlerAspect.interceptHandler(
+    Handler.fromFunctionZIO[(Request, Unit)] { case (request, _) =>
+      ZIO.succeed(request)
+    }
+  ) { handler =>
+    handler.catchAll {
+      case response: Response => Handler.succeed(response)
+      case throwable: Throwable => 
+        Handler.succeed(
+          Response
+            .internalServerError(s"Unexpected error: ${throwable.getMessage}")
+            .addHeader(Header.Custom("X-Error-Type", throwable.getClass.getName))
+        )
+    }
+  }
+
+// Apply to routes
+val routes = myRoutes @@ errorHandler
+```
+
+## Validation Errors
+
+### Request Validation
+
+Validate request data and return structured errors:
+
+```scala
+import zio.http._
+import zio.json._
+
+case class CreateUser(username: String, email: String, age: Int)
+object CreateUser {
+  implicit val codec: JsonCodec[CreateUser] = DeriveJsonCodec.gen
+}
+
+case class ValidationErrors(errors: List[String])
+object ValidationErrors {
+  implicit val codec: JsonCodec[ValidationErrors] = DeriveJsonCodec.gen
+}
+
+def validateUser(user: CreateUser): IO[ValidationErrors, CreateUser] = {
+  val errors = List.newBuilder[String]
+  
+  if (user.username.length < 3)
+    errors += "Username must be at least 3 characters"
+  if (!user.email.contains("@"))
+    errors += "Invalid email address"
+  if (user.age < 18)
+    errors += "User must be 18 or older"
+  
+  val errorList = errors.result()
+  if (errorList.isEmpty)
+    ZIO.succeed(user)
+  else
+    ZIO.fail(ValidationErrors(errorList))
+}
+
+val route =
+  Method.POST / "users" ->
+    handler { (request: Request) =>
+      for {
+        user      <- request.body.to[CreateUser]
+                       .orElseFail(Response.badRequest("Invalid JSON"))
+        validated <- validateUser(user)
+                       .orElseFail(validationErrors =>
+                         Response
+                           .badRequest
+                           .copy(body = Body.fromString(validationErrors.toJson))
+                       )
+        _         <- UserService.create(validated)
+                       .orElseFail(Response.conflict("User already exists"))
+      } yield Response.ok
+    }
+```
+
+## Logging Errors
+
+Log errors for debugging and monitoring:
+
+```scala
+import zio.http._
+
+val route =
+  Method.GET / "data" ->
+    handler { (_: Request) =>
+      DataService
+        .fetch
+        .map(data => Response.json(data.toJson))
+        .tapError(error => 
+          ZIO.logError(s"Failed to fetch data: $error")
+        )
+        .orElseFail(Response.internalServerError("Failed to fetch data"))
+    }
+```
+
+### Structured Error Logging
+
+Log errors with context:
+
+```scala
+val route =
+  Method.GET / "users" / int("id") ->
+    handler { (id: Int, request: Request) =>
+      UserRepo
+        .find(id)
+        .map(user => Response.json(user.toJson))
+        .tapError(error =>
+          ZIO.logError(s"User lookup failed") @@ 
+            ZIOAspect.annotated("userId" -> id.toString, "path" -> request.path.toString)
+        )
+        .orElseFail(Response.notFound(s"User $id not found"))
+    }
+```
+
+## Error Responses with JSON
+
+Return structured error responses:
+
+```scala
+import zio.json._
+
+case class ErrorResponse(
+  error: String,
+  message: String,
+  timestamp: Long = System.currentTimeMillis(),
+  path: Option[String] = None,
+)
+
+object ErrorResponse {
+  implicit val codec: JsonCodec[ErrorResponse] = DeriveJsonCodec.gen
+  
+  def badRequest(message: String, path: Option[String] = None): Response =
+    Response.badRequest.copy(
+      body = Body.fromString(
+        ErrorResponse("BAD_REQUEST", message, path = path).toJson
+      )
+    )
+  
+  def notFound(message: String, path: Option[String] = None): Response =
+    Response.notFound.copy(
+      body = Body.fromString(
+        ErrorResponse("NOT_FOUND", message, path = path).toJson
+      )
+    )
+  
+  def internalError(message: String, path: Option[String] = None): Response =
+    Response.internalServerError.copy(
+      body = Body.fromString(
+        ErrorResponse("INTERNAL_ERROR", message, path = path).toJson
+      )
+    )
+}
+
+val route =
+  Method.GET / "users" / int("id") ->
+    handler { (id: Int, request: Request) =>
+      UserRepo
+        .find(id)
+        .map(user => Response.json(user.toJson))
+        .orElseFail(
+          ErrorResponse.notFound(
+            s"User $id not found",
+            Some(request.path.toString)
+          )
+        )
+    }
+```
+
+## Sandbox for Defects
+
+Handle both failures and defects:
+
+```scala
+val routes: Routes[Any, Response] =
+  Routes(
+    Method.POST / "upload" ->
+      handler { (req: Request) =>
+        for {
+          form <- req.body.asMultipartForm
+                    .mapError(ex =>
+                      Response.internalServerError(
+                        s"Failed to decode multipart/form-data (${ex.getMessage})"
+                      )
+                    )
+          file <- ZIO.fromOption(form.get("file"))
+                    .orElseFail(Response.badRequest("Missing 'file' field"))
+        } yield Response.ok
+      },
+  ).sandbox // Converts defects to failures
+```
+
+The `.sandbox` method converts defects (unexpected errors) into failures (expected errors), allowing you to handle them uniformly.
+
+<Warning>
+Always use `.sandbox` for routes that might throw unexpected exceptions. This prevents server crashes from unhandled defects.
+</Warning>
+
+## Best Practices
+
+<Card title="Use Typed Errors" icon="check">
+Prefer typed errors over throwables for better compile-time safety and documentation.
+</Card>
+
+<Card title="Fail Fast" icon="bolt">
+Validate input early and return clear error messages immediately.
+</Card>
+
+<Card title="Log Errors" icon="file-text">
+Always log errors with sufficient context for debugging.
+</Card>
+
+<Card title="Consistent Error Format" icon="code">
+Use a consistent error response format across your API (like JSON error objects).
+</Card>
+
+<Card title="Avoid Exposing Internal Details" icon="shield">
+Don't leak internal implementation details or stack traces in error responses.
+</Card>
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+import zio.json._
+
+case class ErrorResponse(error: String, message: String)
+object ErrorResponse {
+  implicit val codec: JsonCodec[ErrorResponse] = DeriveJsonCodec.gen
+}
+
+object ErrorHandlingExample extends ZIOAppDefault {
+  
+  // Domain errors
+  sealed trait UserError
+  case class UserNotFound(id: Int) extends UserError
+  case class InvalidUser(reason: String) extends UserError
+  
+  // Mock repository
+  object UserRepo {
+    def find(id: Int): IO[UserNotFound, User] =
+      if (id == 1) ZIO.succeed(User(1, "Alice"))
+      else ZIO.fail(UserNotFound(id))
+  }
+  
+  // Convert domain errors to responses
+  def handleUserError(error: UserError): Response = error match {
+    case UserNotFound(id) =>
+      Response.notFound.copy(
+        body = Body.fromString(
+          ErrorResponse("USER_NOT_FOUND", s"User $id not found").toJson
+        )
+      )
+    case InvalidUser(reason) =>
+      Response.badRequest.copy(
+        body = Body.fromString(
+          ErrorResponse("INVALID_USER", reason).toJson
+        )
+      )
+  }
+  
+  val routes = Routes(
+    Method.GET / "users" / int("id") ->
+      handler { (id: Int, _: Request) =>
+        UserRepo
+          .find(id)
+          .map(user => Response.json(user.toJson))
+          .tapError(error => ZIO.logError(s"User error: $error"))
+          .mapError(handleUserError)
+      },
+  ).sandbox
+  
+  override val run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## Next Steps
+
+- Learn about [Authentication](/guides/authentication) to handle auth-related errors
+- Explore [Dependency Injection](/guides/dependency-injection) to manage error-prone services
+- Read about [Middleware](/concepts/middleware) for cross-cutting error handling

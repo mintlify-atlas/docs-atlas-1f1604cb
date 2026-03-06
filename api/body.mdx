@@ -1,0 +1,599 @@
+---
+title: Body
+description: API reference for the Body type in ZIO HTTP
+---
+
+## Overview
+
+`Body` represents the body of a request or response. The body can be a fixed chunk of bytes, a stream of bytes, form data, or any type that can be encoded into such representations (such as textual data, file contents, JSON, etc.).
+
+```scala
+trait Body
+```
+
+## Creating a Body
+
+### Empty Body
+
+```scala
+val empty: Body = Body.empty
+```
+
+### From String
+
+```scala
+def fromString(text: String, charset: Charset = Charsets.Http): Body
+def fromCharSequence(charSequence: CharSequence, charset: Charset = Charsets.Http): Body
+```
+
+<ParamField path="text" type="String" required>
+  The text content
+</ParamField>
+
+<ParamField path="charset" type="Charset" default="Charsets.Http">
+  Character encoding to use
+</ParamField>
+
+```scala
+val body = Body.fromString("Hello, World!")
+val utf8Body = Body.fromString("Hello", StandardCharsets.UTF_8)
+```
+
+### From Bytes
+
+```scala
+def fromArray(data: Array[Byte]): Body
+def fromChunk(data: Chunk[Byte]): Body
+def fromChunk(data: Chunk[Byte], mediaType: MediaType): Body
+def fromChunk(data: Chunk[Byte], contentType: Body.ContentType): Body
+```
+
+<ParamField path="data" type="Array[Byte] | Chunk[Byte]" required>
+  The binary data
+</ParamField>
+
+<ParamField path="mediaType" type="MediaType">
+  Media type for the content
+</ParamField>
+
+```scala
+val bytes: Array[Byte] = "Hello".getBytes
+val body = Body.fromArray(bytes)
+
+val chunk: Chunk[Byte] = Chunk.fromArray(bytes)
+val body2 = Body.fromChunk(chunk, MediaType.text.plain)
+```
+
+### From File
+
+```scala
+def fromFile(file: java.io.File, chunkSize: Int = 1024 * 4)(implicit trace: Trace): ZIO[Any, Nothing, Body]
+def fromFileRange(file: java.io.File, offset: Long, length: Long, chunkSize: Int = 1024 * 4)(implicit trace: Trace): ZIO[Any, Nothing, Body]
+```
+
+<ParamField path="file" type="java.io.File" required>
+  The file to read from
+</ParamField>
+
+<ParamField path="offset" type="Long">
+  Starting byte position (for range requests)
+</ParamField>
+
+<ParamField path="length" type="Long">
+  Number of bytes to read (for range requests)
+</ParamField>
+
+<ParamField path="chunkSize" type="Int" default="4096">
+  Size of chunks when streaming
+</ParamField>
+
+```scala
+import java.io.File
+
+val bodyEffect = Body.fromFile(new File("/path/to/file.pdf"))
+
+// For partial content (HTTP Range requests)
+val partialBody = Body.fromFileRange(
+  file = new File("/path/to/video.mp4"),
+  offset = 1024,
+  length = 4096
+)
+```
+
+### From JSON
+
+```scala
+def json[A](a: A)(implicit schema: Schema[A]): Body
+def jsonCodec[A](a: A)(implicit encoder: zio.json.JsonEncoder[A]): Body
+```
+
+<ParamField path="a" type="A" required>
+  Value to encode as JSON
+</ParamField>
+
+<ParamField path="schema" type="Schema[A]" required>
+  ZIO Schema for the type (for `json`)
+</ParamField>
+
+<ParamField path="encoder" type="JsonEncoder[A]" required>
+  ZIO JSON encoder (for `jsonCodec`)
+</ParamField>
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+import zio.json._
+
+case class Person(name: String, age: Int)
+
+// Using zio-schema
+implicit val schema: Schema[Person] = DeriveSchema.gen[Person]
+val body = Body.json(Person("Alice", 30))
+
+// Using zio-json
+implicit val encoder: JsonEncoder[Person] = DeriveJsonEncoder.gen[Person]
+val body2 = Body.jsonCodec(Person("Bob", 25))
+```
+
+### From Form Data
+
+```scala
+def fromURLEncodedForm(form: Form, charset: Charset = StandardCharsets.UTF_8): Body
+def fromMultipartForm(form: Form, specificBoundary: Boundary)(implicit trace: Trace): Body
+def fromMultipartFormUUID(form: Form)(implicit trace: Trace): UIO[Body]
+```
+
+<ParamField path="form" type="Form" required>
+  Form data to encode
+</ParamField>
+
+<ParamField path="boundary" type="Boundary">
+  Multipart boundary (for `fromMultipartForm`)
+</ParamField>
+
+```scala
+val form = Form(
+  FormField.simpleField("username", "alice"),
+  FormField.simpleField("email", "alice@example.com")
+)
+
+// URL-encoded form
+val urlEncodedBody = Body.fromURLEncodedForm(form)
+
+// Multipart form with UUID boundary
+val multipartBodyEffect = Body.fromMultipartFormUUID(form)
+```
+
+### From Stream
+
+```scala
+def fromStream(stream: ZStream[Any, Throwable, Byte], contentLength: Long): Body
+def fromStreamChunked(stream: ZStream[Any, Throwable, Byte]): Body
+def fromStream[A](stream: ZStream[Any, Throwable, A])(implicit codec: BinaryCodec[A], trace: Trace): Body
+```
+
+<ParamField path="stream" type="ZStream[Any, Throwable, Byte]" required>
+  Stream of bytes
+</ParamField>
+
+<ParamField path="contentLength" type="Long">
+  Known content length (for `fromStream`)
+</ParamField>
+
+```scala
+val stream: ZStream[Any, Throwable, Byte] = 
+  ZStream.fromIterable("Hello".getBytes)
+
+// With known length
+val body = Body.fromStream(stream, contentLength = 5)
+
+// Chunked transfer encoding (unknown length)
+val chunkedBody = Body.fromStreamChunked(stream)
+```
+
+### From Binary Codec
+
+```scala
+def from[A](a: A)(implicit codec: BinaryCodec[A], trace: Trace): Body
+```
+
+<ParamField path="a" type="A" required>
+  Value to encode
+</ParamField>
+
+<ParamField path="codec" type="BinaryCodec[A]" required>
+  Binary codec for encoding
+</ParamField>
+
+```scala
+import zio.schema.codec.JsonCodec._
+import zio.schema.{DeriveSchema, Schema}
+
+case class User(id: Int, name: String)
+implicit val schema: Schema[User] = DeriveSchema.gen[User]
+
+val body = Body.from(User(1, "Alice"))
+```
+
+## Decoding Body Content
+
+### To Bytes
+
+```scala
+def asArray(implicit trace: Trace): Task[Array[Byte]]
+def asChunk(implicit trace: Trace): Task[Chunk[Byte]]
+```
+
+<ResponseField name="result" type="Task[Array[Byte]] | Task[Chunk[Byte]]">
+  Effect that produces the body bytes. May fail with OOM for large bodies.
+</ResponseField>
+
+```scala
+val body: Body = ???
+val bytesEffect: Task[Array[Byte]] = body.asArray
+val chunkEffect: Task[Chunk[Byte]] = body.asChunk
+```
+
+### To String
+
+```scala
+def asString(implicit trace: Trace): Task[String]
+def asString(charset: Charset)(implicit trace: Trace): Task[String]
+```
+
+<ParamField path="charset" type="Charset">
+  Character encoding (default: Charsets.Http)
+</ParamField>
+
+<ResponseField name="result" type="Task[String]">
+  Effect that produces the decoded string
+</ResponseField>
+
+```scala
+val body: Body = ???
+val stringEffect: Task[String] = body.asString
+val utf8Effect: Task[String] = body.asString(StandardCharsets.UTF_8)
+```
+
+### To Stream
+
+```scala
+def asStream(implicit trace: Trace): ZStream[Any, Throwable, Byte]
+```
+
+<ResponseField name="result" type="ZStream[Any, Throwable, Byte]">
+  Stream of bytes from the body
+</ResponseField>
+
+```scala
+val body: Body = ???
+val stream: ZStream[Any, Throwable, Byte] = body.asStream
+
+// Process stream
+val processed = stream
+  .via(ZPipeline.utf8Decode)
+  .mapZIO(line => Console.printLine(line))
+  .runDrain
+```
+
+### To JSON
+
+```scala
+def asJson[A](implicit schema: Schema[A], trace: Trace): Task[A]
+def asJsonFromCodec[A](implicit decoder: zio.json.JsonDecoder[A], trace: Trace): Task[A]
+```
+
+<ParamField path="schema" type="Schema[A]" required>
+  ZIO Schema for the target type (for `asJson`)
+</ParamField>
+
+<ParamField path="decoder" type="JsonDecoder[A]" required>
+  ZIO JSON decoder (for `asJsonFromCodec`)
+</ParamField>
+
+<ResponseField name="result" type="Task[A]">
+  Effect that produces the decoded value
+</ResponseField>
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+import zio.json._
+
+case class Person(name: String, age: Int)
+
+// Using zio-schema
+implicit val schema: Schema[Person] = DeriveSchema.gen[Person]
+val personEffect: Task[Person] = body.asJson[Person]
+
+// Using zio-json
+implicit val decoder: JsonDecoder[Person] = DeriveJsonDecoder.gen[Person]
+val personEffect2: Task[Person] = body.asJsonFromCodec[Person]
+```
+
+### To Form Data
+
+```scala
+def asURLEncodedForm(implicit trace: Trace): Task[Form]
+def asMultipartForm(implicit trace: Trace): Task[Form]
+def asMultipartFormStream(implicit trace: Trace): Task[StreamingForm]
+```
+
+<ResponseField name="result" type="Task[Form]">
+  Effect that produces the decoded form
+</ResponseField>
+
+```scala
+val body: Body = ???
+
+// URL-encoded form
+val formEffect: Task[Form] = body.asURLEncodedForm
+
+// Multipart form (fully loaded)
+val multipartEffect: Task[Form] = body.asMultipartForm
+
+// Streaming multipart form
+val streamingEffect: Task[StreamingForm] = body.asMultipartFormStream
+```
+
+### Using Binary Codec
+
+```scala
+def to[A](implicit codec: BinaryCodec[A], trace: Trace): Task[A]
+```
+
+<ParamField path="codec" type="BinaryCodec[A]" required>
+  Binary codec for decoding
+</ParamField>
+
+<ResponseField name="result" type="Task[A]">
+  Effect that produces the decoded value
+</ResponseField>
+
+```scala
+import zio.schema.codec.JsonCodec._
+import zio.schema.{DeriveSchema, Schema}
+
+case class User(id: Int, name: String)
+implicit val schema: Schema[User] = DeriveSchema.gen[User]
+
+val body: Body = ???
+val userEffect: Task[User] = body.to[User]
+```
+
+## Body Properties
+
+### Content Type
+
+```scala
+def contentType: Option[Body.ContentType]
+def contentType(newContentType: Body.ContentType): Body
+def contentType(newMediaType: MediaType): Body
+def contentType(newMediaType: MediaType, newBoundary: Boundary): Body
+```
+
+<ParamField path="newMediaType" type="MediaType" required>
+  Media type to set
+</ParamField>
+
+<ParamField path="newBoundary" type="Boundary">
+  Boundary for multipart content
+</ParamField>
+
+```scala
+val body = Body.fromString("Hello")
+  .contentType(MediaType.text.plain)
+
+val jsonBody = Body.fromString("""{ "name": "Alice" }""")
+  .contentType(MediaType.application.json)
+```
+
+### Content Length
+
+```scala
+def knownContentLength: Option[Long]
+```
+
+<ResponseField name="result" type="Option[Long]">
+  Returns `Some(length)` if content length is known, `None` otherwise
+</ResponseField>
+
+```scala
+val body = Body.fromString("Hello")
+val length: Option[Long] = body.knownContentLength // Some(5)
+
+val streamBody = Body.fromStreamChunked(stream)
+val unknownLength: Option[Long] = streamBody.knownContentLength // None
+```
+
+### State Checks
+
+```scala
+def isEmpty: Boolean
+def isComplete: Boolean
+```
+
+<ResponseField name="isEmpty" type="Boolean">
+  Returns `true` if body is known to be empty
+</ResponseField>
+
+<ResponseField name="isComplete" type="Boolean">
+  Returns `true` if bytes have been fully read
+</ResponseField>
+
+```scala
+val emptyBody = Body.empty
+emptyBody.isEmpty // true
+emptyBody.isComplete // true
+
+val stringBody = Body.fromString("Hello")
+stringBody.isEmpty // false
+stringBody.isComplete // true
+
+val streamBody = Body.fromStreamChunked(stream)
+streamBody.isEmpty // false
+streamBody.isComplete // false
+```
+
+## Advanced Operations
+
+### Combining Bodies
+
+```scala
+def ++(that: Body): Body
+```
+
+<ParamField path="that" type="Body" required>
+  Body to combine
+</ParamField>
+
+<ResponseField name="result" type="Body">
+  Right-biased combination. If `that` is empty, returns `self`, otherwise returns `that`.
+</ResponseField>
+
+```scala
+val body1 = Body.empty
+val body2 = Body.fromString("Hello")
+val combined = body1 ++ body2 // Returns body2
+```
+
+### Materializing
+
+```scala
+def materialize(implicit trace: Trace): UIO[Body]
+```
+
+<ResponseField name="result" type="UIO[Body]">
+  Effect that materializes the body into memory
+</ResponseField>
+
+```scala
+val streamBody: Body = Body.fromStreamChunked(largeStream)
+val materializedEffect: UIO[Body] = streamBody.materialize
+```
+
+### Server-Sent Events
+
+```scala
+def asServerSentEvents[T: Schema](implicit trace: Trace): ZStream[Any, Throwable, ServerSentEvent[T]]
+```
+
+<ParamField path="schema" type="Schema[T]" required>
+  Schema for event data
+</ParamField>
+
+<ResponseField name="result" type="ZStream[Any, Throwable, ServerSentEvent[T]]">
+  Stream of server-sent events
+</ResponseField>
+
+```scala
+case class Update(id: Int, message: String)
+implicit val schema: Schema[Update] = DeriveSchema.gen[Update]
+
+val body: Body = ???
+val events: ZStream[Any, Throwable, ServerSentEvent[Update]] = 
+  body.asServerSentEvents[Update]
+```
+
+## ContentType
+
+```scala
+final case class ContentType(
+  mediaType: MediaType,
+  boundary: Option[Boundary] = None,
+  charset: Option[Charset] = None
+)
+```
+
+<ParamField path="mediaType" type="MediaType" required>
+  The media type
+</ParamField>
+
+<ParamField path="boundary" type="Option[Boundary]">
+  Boundary for multipart content
+</ParamField>
+
+<ParamField path="charset" type="Option[Charset]">
+  Character encoding
+</ParamField>
+
+```scala
+val contentType = Body.ContentType(
+  mediaType = MediaType.application.json,
+  charset = Some(StandardCharsets.UTF_8)
+)
+
+val header: Header.ContentType = contentType.asHeader
+```
+
+## Examples
+
+### Creating Response Bodies
+
+```scala
+import zio.http._
+
+// Text response
+val textResponse = Response(
+  status = Status.Ok,
+  body = Body.fromString("Hello, World!")
+    .contentType(MediaType.text.plain)
+)
+
+// JSON response
+case class User(id: Int, name: String)
+implicit val schema: Schema[User] = DeriveSchema.gen[User]
+
+val jsonResponse = Response(
+  status = Status.Ok,
+  body = Body.json(User(1, "Alice"))
+)
+
+// File download
+val fileResponse = Body.fromFile(new File("document.pdf")).map { body =>
+  Response(
+    status = Status.Ok,
+    headers = Headers(
+      Header.ContentDisposition.attachment("document.pdf")
+    ),
+    body = body.contentType(MediaType.application.pdf)
+  )
+}
+```
+
+### Processing Request Bodies
+
+```scala
+import zio.http._
+import zio.schema.{DeriveSchema, Schema}
+
+case class CreateUser(name: String, email: String)
+implicit val schema: Schema[CreateUser] = DeriveSchema.gen[CreateUser]
+
+val handler = Handler.fromFunctionZIO[Request] { request =>
+  for {
+    userData <- request.body.asJson[CreateUser]
+    _        <- Console.printLine(s"Creating user: ${userData.name}")
+    response = Response.json(
+      s"""{ "id": 123, "name": "${userData.name}" }"""
+    )
+  } yield response
+}
+```
+
+### Streaming Large Files
+
+```scala
+import zio.http._
+import java.io.File
+
+val streamingHandler = Handler.fromFunctionZIO[Request] { request =>
+  Body.fromFile(new File("/large/video.mp4")).map { body =>
+    Response(
+      status = Status.Ok,
+      headers = Headers(
+        Header.ContentType(MediaType.video.mp4)
+      ),
+      body = body
+    )
+  }
+}
+```

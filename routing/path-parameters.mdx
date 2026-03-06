@@ -1,0 +1,368 @@
+---
+title: Path Parameters
+description: Extract and work with typed path parameters in ZIO HTTP routes
+---
+
+Path parameters allow you to extract dynamic values from URL paths in a type-safe manner. ZIO HTTP provides built-in codecs for common types and supports custom parameter types.
+
+## Basic Path Parameters
+
+Define path parameters using segment codecs in your route patterns:
+
+```scala
+import zio.http._
+
+// Integer parameter
+val getUserRoute = Method.GET / "users" / int("id") -> handler { (id: Int, req: Request) =>
+  Response.text(s"Fetching user with ID: $id")
+}
+
+// String parameter
+val getArticleRoute = Method.GET / "articles" / string("slug") -> handler { (slug: String, req: Request) =>
+  Response.text(s"Article slug: $slug")
+}
+
+// Long parameter
+val getOrderRoute = Method.GET / "orders" / long("orderId") -> handler { (orderId: Long, req: Request) =>
+  Response.text(s"Order: $orderId")
+}
+```
+
+## Available Parameter Types
+
+ZIO HTTP provides segment codecs for common types:
+
+### Integer Parameters
+
+```scala
+import zio.http._
+
+val route = Method.GET / "items" / int("itemId") -> handler { (itemId: Int, req: Request) =>
+  Response.text(s"Item ID: $itemId")
+}
+
+// Matches: GET /items/42
+// Extracts: itemId = 42
+```
+
+### Long Parameters
+
+```scala
+import zio.http._
+
+val route = Method.GET / "transactions" / long("txId") -> handler { (txId: Long, req: Request) =>
+  Response.text(s"Transaction: $txId")
+}
+
+// Matches: GET /transactions/9876543210
+// Extracts: txId = 9876543210L
+```
+
+### String Parameters
+
+```scala
+import zio.http._
+
+val route = Method.GET / "posts" / string("slug") -> handler { (slug: String, req: Request) =>
+  Response.text(s"Post: $slug")
+}
+
+// Matches: GET /posts/hello-world
+// Extracts: slug = "hello-world"
+```
+
+### Boolean Parameters
+
+```scala
+import zio.http._
+
+val route = Method.GET / "feature" / bool("enabled") -> handler { (enabled: Boolean, req: Request) =>
+  Response.text(s"Feature enabled: $enabled")
+}
+
+// Matches: GET /feature/true or GET /feature/false
+// Extracts: enabled = true or false
+```
+
+### UUID Parameters
+
+```scala
+import zio.http._
+import java.util.UUID
+
+val route = Method.GET / "sessions" / uuid("sessionId") -> handler { (sessionId: UUID, req: Request) =>
+  Response.text(s"Session: $sessionId")
+}
+
+// Matches: GET /sessions/550e8400-e29b-41d4-a716-446655440000
+// Extracts: sessionId as UUID
+```
+
+## Multiple Path Parameters
+
+Combine multiple path parameters in a single route:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "users" / int("userId") / "posts" / int("postId") ->
+  handler { (userId: Int, postId: Int, req: Request) =>
+    Response.text(s"User $userId, Post $postId")
+  }
+
+// Matches: GET /users/123/posts/456
+// Extracts: userId = 123, postId = 456
+```
+
+## Mixed Parameter Types
+
+Mix different parameter types in your routes:
+
+```scala
+import zio.http._
+import java.util.UUID
+
+val route = 
+  Method.GET / "organizations" / uuid("orgId") / "users" / int("userId") / "profile" ->
+  handler { (orgId: UUID, userId: Int, req: Request) =>
+    Response.text(s"Org: $orgId, User: $userId")
+  }
+
+// Matches: GET /organizations/550e8400-e29b-41d4-a716-446655440000/users/42/profile
+```
+
+## Trailing Path Segments
+
+Capture all remaining path segments using the `trailing` codec:
+
+```scala
+import zio.http._
+import zio.http.codec.PathCodec._
+
+val route = Method.GET / "files" / trailing -> handler { (path: Path, req: Request) =>
+  Response.text(s"File path: ${path.encode}")
+}
+
+// Matches: GET /files/documents/2024/report.pdf
+// Extracts: path = Path("documents/2024/report.pdf")
+```
+
+## Path Parameter Validation
+
+Add custom validation to path parameters using transformations:
+
+```scala
+import zio.http._
+import zio.http.codec.PathCodec
+
+val positiveInt = int("id").transformOrFail { id =>
+  if (id > 0) Right(id)
+  else Left(s"ID must be positive, got: $id")
+}(id => Right(id))
+
+val route = Method.GET / "users" / positiveInt -> handler { (id: Int, req: Request) =>
+  Response.text(s"Valid user ID: $id")
+}
+```
+
+## Custom Parameter Types
+
+Create custom parameter types by transforming existing codecs:
+
+```scala
+import zio.http._
+import zio.http.codec.PathCodec
+
+case class ProductCode(value: String)
+
+val productCodeCodec = string("code").transform { str =>
+  ProductCode(str.toUpperCase)
+}(code => code.value)
+
+val route = Method.GET / "products" / productCodeCodec -> handler { (code: ProductCode, req: Request) =>
+  Response.text(s"Product code: ${code.value}")
+}
+
+// Matches: GET /products/abc123
+// Extracts: code = ProductCode("ABC123")
+```
+
+## Transforming Parameters
+
+Apply transformations to path parameters:
+
+### Simple Transform
+
+```scala
+import zio.http._
+
+val upperCaseSlug = string("slug").transform(_.toUpperCase)(_.toLowerCase)
+
+val route = Method.GET / "articles" / upperCaseSlug -> handler { (slug: String, req: Request) =>
+  Response.text(s"Article: $slug") // slug is uppercase
+}
+```
+
+### Transform with Validation
+
+```scala
+import zio.http._
+
+enum Status:
+  case Active, Inactive, Pending
+
+val statusCodec = string("status").transformOrFail { str =>
+  str.toLowerCase match {
+    case "active" => Right(Status.Active)
+    case "inactive" => Right(Status.Inactive)
+    case "pending" => Right(Status.Pending)
+    case _ => Left(s"Invalid status: $str")
+  }
+}(status => Right(status.toString.toLowerCase))
+
+val route = Method.GET / "users" / "status" / statusCodec -> handler { (status: Status, req: Request) =>
+  Response.text(s"Status: $status")
+}
+```
+
+## Formatting Path Parameters
+
+Convert values back to paths for generating URLs:
+
+```scala
+import zio.http._
+
+val pattern = Method.GET / "users" / int("userId") / "posts" / int("postId")
+
+// Format parameters into a path
+val path = pattern.format((123, 456))
+// path: Right(Path("/users/123/posts/456"))
+
+// Use for URL generation
+val url = path.map(p => URL(p))
+```
+
+## Parameter Examples and Documentation
+
+Add examples to path parameters for better API documentation:
+
+```scala
+import zio.http._
+
+val userIdParam = int("userId")
+  .example("example1", 123)
+  .examples(
+    "admin" -> 1,
+    "regular" -> 1000,
+    "test" -> 9999
+  )
+
+val route = Method.GET / "users" / userIdParam -> handler { (userId: Int, req: Request) =>
+  Response.text(s"User: $userId")
+}
+```
+
+## Combining Parameters with Literals
+
+Mix literal path segments with parameters:
+
+```scala
+import zio.http._
+
+// Literal segments between parameters
+val route = Method.GET / "api" / "v1" / "users" / int("id") / "profile" ->
+  handler { (id: Int, req: Request) =>
+    Response.text(s"Profile for user $id")
+  }
+
+// Multiple parameter segments
+val dateRoute = Method.GET / "archive" / int("year") / int("month") / int("day") ->
+  handler { (year: Int, month: Int, day: Int, req: Request) =>
+    Response.text(s"Archive: $year-$month-$day")
+  }
+```
+
+## Parameter Sub-Segments
+
+Combine multiple parameters within a single path segment:
+
+```scala
+import zio.http._
+import zio.http.codec.SegmentCodec._
+
+// Combine literal and parameter in one segment
+val versionedId = literal("v") ~ int("version") ~ literal("-") ~ int("id")
+
+// Results in pattern like: /items/v1-123
+```
+
+## Error Handling
+
+Path parameter parsing failures result in automatic 404 or 400 responses:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "users" / int("id") -> handler { (id: Int, req: Request) =>
+  Response.text(s"User: $id")
+}
+
+// GET /users/abc -> 404 Not Found (invalid integer)
+// GET /users/123 -> 200 OK
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Specific Types" icon="code">
+    Use the most specific type possible (`int`, `uuid`) rather than `string` for better validation and type safety.
+  </Card>
+
+  <Card title="Descriptive Names" icon="tag">
+    Give parameters clear, descriptive names that indicate their purpose (e.g., `userId`, `orderId`, not just `id`).
+  </Card>
+
+  <Card title="Validate Early" icon="shield-check">
+    Use `transformOrFail` to validate parameters as early as possible in the request processing pipeline.
+  </Card>
+
+  <Card title="Document Parameters" icon="book">
+    Add examples and documentation to parameters to improve API usability and generate better docs.
+  </Card>
+</CardGroup>
+
+## Common Patterns
+
+### REST Resource Pattern
+
+```scala
+import zio.http._
+
+val getResource = Method.GET / "api" / "resources" / int("id")
+val updateResource = Method.PUT / "api" / "resources" / int("id")
+val deleteResource = Method.DELETE / "api" / "resources" / int("id")
+```
+
+### Hierarchical Resources
+
+```scala
+import zio.http._
+
+val getNestedResource = 
+  Method.GET / "users" / int("userId") / "posts" / int("postId") / "comments" / int("commentId")
+```
+
+### Versioned API
+
+```scala
+import zio.http._
+
+val v1Route = Method.GET / "api" / "v1" / "users" / int("id")
+val v2Route = Method.GET / "api" / "v2" / "users" / uuid("id")
+```
+
+## See Also
+
+- [Route Patterns](/routing/route-patterns) - Define route patterns with HTTP methods
+- [Query Parameters](/routing/query-parameters) - Work with URL query strings
+- [PathCodec Reference](/api-reference/path-codec) - Complete PathCodec API documentation

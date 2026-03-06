@@ -1,0 +1,449 @@
+---
+title: Middleware
+description: Add cross-cutting concerns to your ZIO HTTP applications
+---
+
+Middleware in ZIO HTTP provides a way to add cross-cutting concerns to routes, such as logging, authentication, CORS, metrics, and more. Middleware operates at the routes level, transforming entire route collections.
+
+## Overview
+
+```scala
+trait Middleware[-UpperEnv] {
+  def apply[Env1 <: UpperEnv, Err](routes: Routes[Env1, Err]): Routes[Env1, Err]
+}
+```
+
+Middleware is contravariant in the environment type, meaning it can be applied to routes with more specific environmental requirements.
+
+## Applying Middleware
+
+Use the `@@` operator to apply middleware to routes:
+
+```scala
+import zio.http._
+
+val routes: Routes[Any, Nothing] = ???
+
+// Apply single middleware
+val withCors = routes @@ Middleware.cors
+
+// Chain multiple middleware
+val enhanced = routes @@ 
+  Middleware.cors @@
+  Middleware.timeout(30.seconds) @@
+  Middleware.metrics()
+```
+
+## Built-in Middleware
+
+### CORS
+
+Handle Cross-Origin Resource Sharing:
+
+```scala
+// Default CORS configuration
+val withCors = routes @@ Middleware.cors
+
+// Custom configuration
+val corsConfig = Middleware.CorsConfig(
+  allowedOrigin = origin => 
+    if (origin.host == "example.com") 
+      Some(Header.AccessControlAllowOrigin.Specific(origin))
+    else None,
+  allowedMethods = Header.AccessControlAllowMethods(
+    Method.GET, Method.POST, Method.PUT, Method.DELETE
+  ),
+  allowedHeaders = Header.AccessControlAllowHeaders.All,
+  allowCredentials = Header.AccessControlAllowCredentials.Allow,
+  maxAge = Some(Header.AccessControlMaxAge(3600.seconds))
+)
+
+val withCustomCors = routes @@ Middleware.cors(corsConfig)
+```
+
+<Accordion title="CORS Configuration Options">
+- **`allowedOrigin`**: Function to determine allowed origins
+- **`allowedMethods`**: HTTP methods permitted in CORS requests
+- **`allowedHeaders`**: Headers allowed in requests
+- **`allowCredentials`**: Whether to allow credentials
+- **`exposedHeaders`**: Headers exposed to the client
+- **`maxAge`**: How long preflight results can be cached
+</Accordion>
+
+### Timeout
+
+Set request timeout limits:
+
+```scala
+import zio._
+
+// 30 second timeout
+val withTimeout = routes @@ Middleware.timeout(30.seconds)
+
+// Returns 408 Request Timeout if exceeded
+```
+
+### Metrics
+
+Track HTTP metrics:
+
+```scala
+val withMetrics = routes @@ Middleware.metrics(
+  concurrentRequestsName = "http_concurrent_requests_total",
+  totalRequestsName = "http_requests_total",
+  requestDurationName = "http_request_duration_seconds",
+  extraLabels = Set(
+    MetricLabel("service", "api"),
+    MetricLabel("version", "1.0")
+  )
+)
+```
+
+This middleware tracks:
+- **Concurrent requests**: Current number of active requests
+- **Total requests**: Counter of all requests by method, path, and status
+- **Request duration**: Histogram of request processing time
+
+### Static File Serving
+
+Serve static files from directory:
+
+```scala
+import java.io.File
+
+val staticFiles = routes @@ Middleware.serveDirectory(
+  path = Path.empty / "assets",
+  docRoot = new File("/var/www/static")
+)
+```
+
+Serve from classpath resources:
+
+```scala
+val staticResources = routes @@ Middleware.serveResources(
+  path = Path.empty / "assets",
+  resourcePrefix = "public"
+)
+```
+
+<Note>
+Static file middleware is applied at the routes level and adds new routes to handle file requests.
+</Note>
+
+### Log Annotations
+
+Add log annotations to requests:
+
+```scala
+// Static annotations
+val withAnnotations = routes @@ Middleware.logAnnotate(
+  "service" -> "api",
+  "version" -> "1.0"
+)
+
+// Dynamic annotations from request
+val withDynamicAnnotations = routes @@ Middleware.logAnnotate { request =>
+  Set(
+    LogAnnotation("path", request.path.encode),
+    LogAnnotation("method", request.method.toString)
+  )
+}
+
+// Annotate specific headers
+val withHeaderAnnotations = routes @@ 
+  Middleware.logAnnotateHeaders(
+    Header.UserAgent,
+    Header.Referer,
+    Header.Authorization
+  )
+```
+
+### Header Forwarding
+
+Forward headers to nested services:
+
+```scala
+// Forward specific headers
+val withForwarding = routes @@ Middleware.forwardHeaders(
+  Header.Authorization,
+  Header.UserAgent,
+  Header.Custom("X-Request-ID", "")
+)
+
+// Forward with custom logic
+val withCustomForwarding = routes @@ Middleware.forwardHeaders { headers =>
+  Headers(
+    headers.get(Header.Authorization).toList ++
+    headers.get(Header.Custom("X-Request-ID", "")).toList
+  )
+}
+```
+
+### Ensure Headers
+
+Guarantee specific headers are present:
+
+```scala
+// Add header if missing
+val withRequestId = routes @@ Middleware.ensureHeader(
+  "X-Request-ID"
+) {
+  java.util.UUID.randomUUID().toString
+}
+
+// With typed header
+val withContentType = routes @@ Middleware.ensureHeader(
+  Header.ContentType
+) {
+  Header.ContentType(MediaType.application.json)
+}
+```
+
+### Flash Scope
+
+Manage flash-scoped data:
+
+```scala
+val withFlashScope = routes @@ Middleware.flashScopeHandling
+```
+
+## Combining Middleware
+
+Middleware can be combined using `++` or `@@`:
+
+```scala
+val middleware1 = Middleware.cors
+val middleware2 = Middleware.timeout(30.seconds)
+
+// Combine middleware
+val combined = middleware1 ++ middleware2
+
+// Apply combined middleware
+val routes = myRoutes @@ combined
+
+// Or chain directly
+val routes2 = myRoutes @@ middleware1 @@ middleware2
+```
+
+## Custom Middleware
+
+Create custom middleware by implementing the `Middleware` trait:
+
+```scala
+import zio.http._
+
+object CustomMiddleware {
+  def requestLogger(implicit trace: Trace): Middleware[Any] = 
+    new Middleware[Any] {
+      def apply[Env1 <: Any, Err](
+        routes: Routes[Env1, Err]
+      ): Routes[Env1, Err] = {
+        routes.transform[Env1] { handler =>
+          Handler.scoped[Env1] {
+            handler { (request: Request) =>
+              for {
+                _        <- ZIO.logInfo(s"${request.method} ${request.path}")
+                start    <- Clock.nanoTime
+                response <- handler(request)
+                end      <- Clock.nanoTime
+                duration = (end - start) / 1_000_000
+                _        <- ZIO.logInfo(s"Response ${response.status} (${duration}ms)")
+              } yield response
+            }
+          }
+        }
+      }
+    }
+}
+
+val routes = myRoutes @@ CustomMiddleware.requestLogger
+```
+
+### Example: Authentication Middleware
+
+```scala
+trait AuthService {
+  def authenticate(token: String): UIO[Option[User]]
+}
+
+case class User(id: String, name: String)
+
+def authMiddleware(implicit trace: Trace): Middleware[AuthService] = 
+  new Middleware[AuthService] {
+    def apply[Env1 <: AuthService, Err](
+      routes: Routes[Env1, Err]
+    ): Routes[Env1, Err] = {
+      routes.transform[Env1] { handler =>
+        Handler.scoped[Env1] {
+          handler { (request: Request) =>
+            request.header(Header.Authorization) match {
+              case Some(Header.Authorization.Bearer(token)) =>
+                ZIO.serviceWithZIO[AuthService](_.authenticate(token)).flatMap {
+                  case Some(user) => 
+                    // Store user in scope for handlers
+                    handler(request)
+                  case None => 
+                    ZIO.succeed(Response.unauthorized("Invalid token"))
+                }
+              case _ => 
+                ZIO.succeed(Response.unauthorized("Missing authorization"))
+            }
+          }
+        }
+      }
+    }
+  }
+```
+
+### Example: Rate Limiting
+
+```scala
+import zio.http._
+import zio._
+
+case class RateLimiter(
+  maxRequests: Int,
+  window: Duration
+)
+
+def rateLimitMiddleware(
+  config: RateLimiter
+)(implicit trace: Trace): Middleware[Any] = 
+  new Middleware[Any] {
+    def apply[Env1 <: Any, Err](
+      routes: Routes[Env1, Err]
+    ): Routes[Env1, Err] = {
+      // Simplified rate limiter implementation
+      routes.transform[Env1] { handler =>
+        Handler.scoped[Env1] {
+          handler { (request: Request) =>
+            val clientId = request.remoteAddress
+              .map(_.toString)
+              .getOrElse("unknown")
+            
+            // Check rate limit (simplified)
+            val allowed = true // Implement actual rate limit check
+            
+            if (allowed) {
+              handler(request)
+            } else {
+              ZIO.succeed(
+                Response.status(Status.TooManyRequests)
+                  .addHeader(Header.RetryAfter.ByDate(
+                    java.time.ZonedDateTime.now().plusSeconds(60)
+                  ))
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+```
+
+## Handler Aspects
+
+`HandlerAspect` is a more fine-grained abstraction that works at the handler level. You can convert handler aspects to middleware:
+
+```scala
+import zio.http._
+
+// Handler aspect
+val aspect: HandlerAspect[Any, Unit] = 
+  HandlerAspect.addHeader(Header.Server("ZIO-HTTP"))
+
+// Apply to routes (automatically works)
+val routes = myRoutes @@ aspect
+```
+
+Common handler aspects include:
+- Header manipulation
+- Request/response logging
+- Error handling
+- Authentication/authorization
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Order Matters" icon="sort">
+    Apply middleware in the correct order. Authentication before authorization, logging before error handling.
+  </Card>
+  <Card title="Keep It Focused" icon="crosshairs">
+    Each middleware should handle one concern. Compose multiple middleware for complex behavior.
+  </Card>
+  <Card title="Consider Performance" icon="gauge-high">
+    Middleware runs for every request. Keep logic efficient and avoid unnecessary computations.
+  </Card>
+  <Card title="Handle Errors" icon="shield-check">
+    Ensure middleware gracefully handles errors and doesn't break the request pipeline.
+  </Card>
+</CardGroup>
+
+## Common Patterns
+
+<Accordion title="Request/Response Logging">
+```scala
+def loggingMiddleware(implicit trace: Trace): Middleware[Any] = 
+  new Middleware[Any] {
+    def apply[Env1, Err](routes: Routes[Env1, Err]): Routes[Env1, Err] =
+      routes.transform[Env1] { handler =>
+        Handler.scoped[Env1] {
+          handler { (request: Request) =>
+            for {
+              _        <- ZIO.logInfo(s"⬅ ${request.method} ${request.path}")
+              response <- handler(request)
+              _        <- ZIO.logInfo(s"➡ ${response.status}")
+            } yield response
+          }
+        }
+      }
+  }
+```
+</Accordion>
+
+<Accordion title="Error Recovery">
+```scala
+def errorRecoveryMiddleware(implicit trace: Trace): Middleware[Any] = 
+  new Middleware[Any] {
+    def apply[Env1, Err](routes: Routes[Env1, Err]): Routes[Env1, Err] =
+      routes.transform[Env1] { handler =>
+        handler.sandbox.catchAll { error =>
+          Handler.fromZIO {
+            ZIO.logError(s"Request failed: ${error.prettyPrint}") *>
+            ZIO.succeed(Response.internalServerError("An error occurred"))
+          }
+        }
+      }
+  }
+```
+</Accordion>
+
+<Accordion title="Request ID Tracking">
+```scala
+def requestIdMiddleware(implicit trace: Trace): Middleware[Any] = 
+  new Middleware[Any] {
+    def apply[Env1, Err](routes: Routes[Env1, Err]): Routes[Env1, Err] =
+      routes.transform[Env1] { handler =>
+        Handler.scoped[Env1] {
+          handler { (request: Request) =>
+            val requestId = request.header(Header.Custom("X-Request-ID", ""))
+              .map(_.renderedValue)
+              .getOrElse(java.util.UUID.randomUUID().toString)
+            
+            ZIO.logAnnotate("requestId", requestId) {
+              handler(request).map { response =>
+                response.addHeader(Header.Custom("X-Request-ID", requestId))
+              }
+            }
+          }
+        }
+      }
+  }
+```
+</Accordion>
+
+## Related
+
+- [Routes](/concepts/routes) - Route composition and organization
+- [Handler](/concepts/handlers) - Request processing logic
+- [HandlerAspect](https://zio.dev/zio-http/reference/handler-aspect) - Fine-grained handler transformation

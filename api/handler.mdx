@@ -1,0 +1,629 @@
+---
+title: Handler
+description: API reference for zio.http.Handler
+---
+
+`Handler` is a functional abstraction for processing input into output, with support for errors and environmental requirements. It forms the core building block for request processing in ZIO HTTP.
+
+## Type Signature
+
+```scala
+sealed trait Handler[-R, +Err, -In, +Out]
+```
+
+<ParamField path="R" type="type parameter">
+  The environment type required by the handler
+</ParamField>
+
+<ParamField path="Err" type="type parameter">
+  The error type that can be produced
+</ParamField>
+
+<ParamField path="In" type="type parameter">
+  The input type accepted by the handler
+</ParamField>
+
+<ParamField path="Out" type="type parameter">
+  The output type produced by the handler
+</ParamField>
+
+## Core Operation
+
+### apply
+
+```scala
+def apply(in: In): ZIO[Scope & R, Err, Out]
+```
+
+Executes the handler with the provided input.
+
+<ParamField path="in" type="In">
+  The input value to process
+</ParamField>
+
+<ResponseField name="return" type="ZIO[Scope & R, Err, Out]">
+  Effect that produces the output or fails with an error
+</ResponseField>
+
+## Creating Handlers
+
+### Handler.succeed
+
+```scala
+def succeed[Out](out: => Out): Handler[Any, Nothing, Any, Out]
+```
+
+Creates a handler that always succeeds with the same value.
+
+<ParamField path="out" type="Out">
+  The value to always return
+</ParamField>
+
+### Handler.fail
+
+```scala
+def fail[Err](err: => Err): Handler[Any, Err, Any, Nothing]
+```
+
+Creates a handler that always fails with the specified error.
+
+### Handler.fromZIO
+
+```scala
+def fromZIO[R, Err, Out](zio: => ZIO[R, Err, Out]): Handler[R, Err, Any, Out]
+```
+
+Converts a ZIO effect into a handler.
+
+<ParamField path="zio" type="ZIO[R, Err, Out]">
+  The ZIO effect to convert
+</ParamField>
+
+**Example:**
+
+```scala
+Handler.fromZIO(Random.nextInt)
+```
+
+### Handler.fromFunction
+
+```scala
+def fromFunction[In]: FromFunction[In]
+```
+
+Creates a handler from a pure function `In => Out`.
+
+**Example:**
+
+```scala
+Handler.fromFunction[String] { str => str.toUpperCase }
+```
+
+### Handler.fromFunctionZIO
+
+```scala
+def fromFunctionZIO[In]: FromFunctionZIO[In]
+```
+
+Creates a handler from an effectful function `In => ZIO[R, Err, Out]`.
+
+**Example:**
+
+```scala
+Handler.fromFunctionZIO[Request] { req =>
+  database.fetchUser(req.header("user-id"))
+}
+```
+
+### Handler.fromFunctionHandler
+
+```scala
+def fromFunctionHandler[In]: FromFunctionHandler[In]
+```
+
+Creates a handler from a function that returns a handler.
+
+### Handler.attempt
+
+```scala
+def attempt[Out](out: => Out): Handler[Any, Throwable, Any, Out]
+```
+
+Attempts to create a handler, catching any non-fatal exceptions.
+
+### Handler.identity
+
+```scala
+def identity[A]: Handler[Any, Nothing, A, A]
+```
+
+Pass-through handler that returns its input unchanged.
+
+## Response Handlers
+
+### Handler.fromResponse
+
+```scala
+def fromResponse(response: => Response): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a handler that always returns the same response.
+
+### Handler.fromResponseZIO
+
+```scala
+def fromResponseZIO[R, Err](getResponse: ZIO[R, Err, Response]): Handler[R, Err, Any, Response]
+```
+
+Creates a handler from a ZIO that produces a response.
+
+### Handler.ok
+
+```scala
+val ok: Handler[Any, Nothing, Any, Response]
+```
+
+Handler that returns 200 OK.
+
+### Handler.text
+
+```scala
+def text(text: => CharSequence): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a handler returning plain text.
+
+<ParamField path="text" type="CharSequence">
+  The text content to return
+</ParamField>
+
+### Handler.html
+
+```scala
+def html(view: => Html): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a handler returning HTML.
+
+### Handler.json
+
+```scala
+def json(data: CharSequence): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a handler returning JSON (content-type set to application/json).
+
+### Handler.fromBody
+
+```scala
+def fromBody(body: => Body): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a handler with the specified body and 200 status.
+
+## Error Response Handlers
+
+### Handler.error
+
+```scala
+def error(status: => Status.Error): Handler[Any, Nothing, Any, Response]
+def error(status: => Status.Error, message: => String): Handler[Any, Nothing, Any, Response]
+```
+
+Creates handlers for error responses.
+
+### Handler.notFound
+
+```scala
+val notFound: Handler[Any, Nothing, Request, Response]
+def notFound(message: => String): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a 404 Not Found handler.
+
+### Handler.badRequest
+
+```scala
+val badRequest: Handler[Any, Nothing, Any, Response]
+def badRequest(message: => String): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a 400 Bad Request handler.
+
+### Handler.forbidden
+
+```scala
+def forbidden: Handler[Any, Nothing, Any, Response]
+def forbidden(message: => String): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a 403 Forbidden handler.
+
+### Handler.internalServerError
+
+```scala
+def internalServerError: Handler[Any, Nothing, Any, Response]
+def internalServerError(message: => String): Handler[Any, Nothing, Any, Response]
+```
+
+Creates a 500 Internal Server Error handler.
+
+## Streaming Handlers
+
+### Handler.fromStream
+
+```scala
+def fromStream[R](stream: ZStream[R, Throwable, Byte], contentLength: Long)(implicit trace: Trace): Handler[R, Throwable, Any, Response]
+```
+
+Creates a handler from a byte stream with known content length.
+
+### Handler.fromStreamChunked
+
+```scala
+def fromStreamChunked[R](stream: ZStream[R, Throwable, Byte])(implicit trace: Trace): Handler[R, Throwable, Any, Response]
+```
+
+Creates a handler from a byte stream using chunked transfer encoding.
+
+## File Handlers
+
+### Handler.fromFile
+
+```scala
+def fromFile[R](makeFile: => File, charset: Charset = Charsets.Utf8)(implicit trace: Trace): Handler[R, Throwable, Request, Response]
+```
+
+Creates a handler that serves a file with support for range requests.
+
+<ParamField path="makeFile" type="File">
+  The file to serve
+</ParamField>
+
+<ParamField path="charset" type="Charset" default="Charsets.Utf8">
+  Character encoding for text files
+</ParamField>
+
+### Handler.fromFileZIO
+
+```scala
+def fromFileZIO[R](getFile: ZIO[R, Throwable, File], charset: Charset = Charsets.Utf8)(implicit trace: Trace): Handler[R, Throwable, Request, Response]
+```
+
+Effectful version that produces the file via ZIO.
+
+## Transformation
+
+### map
+
+```scala
+def map[Out1](f: Out => Out1)(implicit trace: Trace): Handler[R, Err, In, Out1]
+```
+
+Transforms the output using a pure function.
+
+<ParamField path="f" type="Out => Out1">
+  Function to transform the output
+</ParamField>
+
+**Example:**
+
+```scala
+handler.map(_.toUpperCase)
+```
+
+### mapZIO
+
+```scala
+def mapZIO[R1 <: R, Err1 >: Err, Out1](f: Out => ZIO[R1, Err1, Out1])(implicit trace: Trace): Handler[R1, Err1, In, Out1]
+```
+
+Effectfully transforms the output.
+
+### contramap
+
+```scala
+def contramap[In1](f: In1 => In): Handler[R, Err, In1, Out]
+```
+
+Transforms the input before passing to the handler.
+
+<ParamField path="f" type="In1 => In">
+  Function to transform the input
+</ParamField>
+
+### contramapZIO
+
+```scala
+def contramapZIO[R1 <: R, Err1 >: Err, In1](f: In1 => ZIO[R1, Err1, In])(implicit trace: Trace): Handler[R1, Err1, In1, Out]
+```
+
+Effectfully transforms the input.
+
+### flatMap
+
+```scala
+def flatMap[R1 <: R, Err1 >: Err, In1 <: In, Out1](f: Out => Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, Out1]
+```
+
+Sequences handlers, using the output of one as input to compute the next.
+
+### flatten
+
+```scala
+def flatten[R1 <: R, Err1 >: Err, In1 <: In, Out1](implicit ev: Out <:< Handler[R1, Err1, In1, Out1], trace: Trace): Handler[R1, Err1, In1, Out1]
+```
+
+Flattens a handler of a handler.
+
+## Composition
+
+### Right Composition Operator
+
+```scala
+def >>>[R1 <: R, Err1 >: Err, In1 >: Out, Out1](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In, Out1]
+```
+
+Composes handlers left-to-right using the `>>>` operator (pipes output into next handler).
+
+**Example:**
+
+```scala
+val pipeline = parseJson >>> validateData >>> saveToDatabase
+```
+
+### Left Composition Operator
+
+```scala
+def <<<[R1 <: R, Err1 >: Err, In1, Out1 <: In](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, Out]
+```
+
+Composes handlers right-to-left using the `<<<` operator.
+
+### andThen / compose
+
+```scala
+def andThen[R1 <: R, Err1 >: Err, In1 >: Out, Out1](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In, Out1]
+def compose[R1 <: R, Err1 >: Err, In1, Out1 <: In](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, Out]
+```
+
+Named aliases for `>>>` and `<<<`.
+
+## Error Handling
+
+### catchAll
+
+```scala
+def catchAll[R1 <: R, Err1, In1 <: In, Out1 >: Out](f: Err => Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, Out1]
+```
+
+Recovers from all errors using a function that produces a new handler.
+
+<ParamField path="f" type="Err => Handler[R1, Err1, In1, Out1]">
+  Function to handle errors
+</ParamField>
+
+### catchSome
+
+```scala
+def catchSome[R1 <: R, Err1 >: Err, In1 <: In, Out1 >: Out](pf: PartialFunction[Err, Handler[R1, Err1, In1, Out1]])(implicit trace: Trace): Handler[R1, Err1, In1, Out1]
+```
+
+Recovers from some errors using a partial function.
+
+### mapError
+
+```scala
+def mapError[Err1](f: Err => Err1)(implicit trace: Trace): Handler[R, Err1, In, Out]
+```
+
+Transforms the error type.
+
+### mapErrorZIO
+
+```scala
+def mapErrorZIO[R1 <: R, Err1, Out1 >: Out](f: Err => ZIO[R1, Err1, Out1])(implicit trace: Trace): Handler[R1, Err1, In, Out1]
+```
+
+Effectfully transforms errors.
+
+### mapErrorCause
+
+```scala
+def mapErrorCause[Err2](f: Cause[Err] => Err2)(implicit trace: Trace): Handler[R, Err2, In, Out]
+```
+
+Transforms error causes (including defects).
+
+### orElse
+
+```scala
+def orElse[R1 <: R, Err1, In1 <: In, Out1 >: Out](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, Out1]
+```
+
+Runs the alternative handler if this one fails.
+
+**Example:**
+
+```scala
+primaryHandler <> fallbackHandler
+```
+
+### orDie
+
+```scala
+def orDie(implicit ev1: Err <:< Throwable, ev2: CanFail[Err], trace: Trace): Handler[R, Nothing, In, Out]
+```
+
+Converts failures into defects (unchecked errors).
+
+### sandbox
+
+```scala
+def sandbox(implicit trace: Trace): Handler[R, Response, In, Out]
+```
+
+Automatically converts all failures (including defects) into HTTP responses.
+
+## Observation
+
+### tapZIO
+
+```scala
+def tapZIO[R1 <: R, Err1 >: Err](f: Out => ZIO[R1, Err1, Any])(implicit trace: Trace): Handler[R1, Err1, In, Out]
+```
+
+Effectfully observes the output without changing it.
+
+**Example:**
+
+```scala
+handler.tapZIO { response =>
+  ZIO.logInfo(s"Status: ${response.status}")
+}
+```
+
+### tapErrorZIO
+
+```scala
+def tapErrorZIO[R1 <: R, Err1 >: Err](f: Err => ZIO[R1, Err1, Any])(implicit trace: Trace): Handler[R1, Err1, In, Out]
+```
+
+Effectfully observes errors without changing them.
+
+### onExit
+
+```scala
+def onExit[R1 <: R, Err1 >: Err](f: Exit[Err, Out] => ZIO[R1, Err1, Any])(implicit trace: Trace): Handler[R1, Err1, In, Out]
+```
+
+Observes both success and failure outcomes.
+
+## Timing
+
+### delay / delayAfter
+
+```scala
+def delay(duration: Duration)(implicit trace: Trace): Handler[R, Err, In, Out]
+def delayAfter(duration: Duration)(implicit trace: Trace): Handler[R, Err, In, Out]
+```
+
+Delays the production of output by the specified duration.
+
+### delayBefore
+
+```scala
+def delayBefore(duration: Duration)(implicit trace: Trace): Handler[R, Err, In, Out]
+```
+
+Delays the consumption of input.
+
+### timeout
+
+```scala
+def timeout(duration: Duration)(implicit trace: Trace): Handler[R, Err, In, Option[Out]]
+```
+
+Times out the handler after the specified duration, returning `None`.
+
+### timeoutFail
+
+```scala
+def timeoutFail[Out1 >: Out](out: Out1)(duration: Duration)(implicit trace: Trace): Handler[R, Err, In, Out1]
+```
+
+Times out with a fallback value.
+
+## Combining Handlers
+
+### zip
+
+```scala
+def zip[R1 <: R, Err1 >: Err, In1 <: In, Out1](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, (Out, Out1)]
+```
+
+Combines two handlers, producing a tuple of outputs.
+
+### zipLeft
+
+```scala
+def zipLeft[R1 <: R, Err1 >: Err, In1 <: In, Out1](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, Out]
+```
+
+Runs both handlers, keeping only the first output. Also available as the `<*` operator.
+
+### zipRight
+
+```scala
+def zipRight[R1 <: R, Err1 >: Err, In1 <: In, Out1](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, Out1]
+```
+
+Runs both handlers, keeping only the second output. Also available as the `*>` operator.
+
+### race
+
+```scala
+def race[R1 <: R, Err1 >: Err, In1 <: In, Out1 >: Out](that: Handler[R1, Err1, In1, Out1])(implicit trace: Trace): Handler[R1, Err1, In1, Out1]
+```
+
+Races two handlers, returning the first to complete.
+
+## Dependency Injection
+
+### provideEnvironment
+
+```scala
+def provideEnvironment(r: ZEnvironment[R])(implicit trace: Trace): Handler[Any, Err, In, Out]
+```
+
+Provides the environment to the handler.
+
+<ParamField path="r" type="ZEnvironment[R]">
+  The environment to provide
+</ParamField>
+
+### provideLayer
+
+```scala
+def provideLayer[Err1 >: Err, R0](layer: ZLayer[R0, Err1, R])(implicit trace: Trace): Handler[R0, Err1, In, Out]
+```
+
+Provides the environment via a ZLayer.
+
+### provideSomeEnvironment
+
+```scala
+def provideSomeEnvironment[R1](f: ZEnvironment[R1] => ZEnvironment[R])(implicit trace: Trace): Handler[R1, Err, In, Out]
+```
+
+Provides part of the environment.
+
+## Conversion
+
+### toRoutes
+
+```scala
+def toRoutes(implicit in: Request <:< In, out: Out <:< Response, trace: Trace): Routes[R, Err]
+```
+
+Converts a request handler into Routes.
+
+<ResponseField name="return" type="Routes[R, Err]">
+  Routes containing this handler
+</ResponseField>
+
+## Aspect Application
+
+### @@
+
+```scala
+def @@[Env1 <: R, In1 <: In](aspect: HandlerAspect[Env1, Unit])(implicit in: Handler.IsRequest[In1], out: Out <:< Response, err: Err <:< Response): Handler[Env1, Response, Request, Response]
+```
+
+Applies an aspect to transform the handler.
+
+**Example:**
+
+```scala
+handler @@ Middleware.timeout(30.seconds)
+```

@@ -1,0 +1,125 @@
+---
+title: Server API
+description: API reference for the ZIO HTTP Server type
+---
+
+The `Server` type represents an HTTP server capable of serving routes and handling requests.
+
+## Type Signature
+
+```scala
+trait Server {
+  def install[R](routes: Routes[R, Response])(implicit trace: Trace, tag: EnvironmentTag[R]): URIO[R, Unit]
+  def port: UIO[Int]
+}
+```
+
+## Creating Servers
+
+### Server.default
+
+```scala
+val default: ZLayer[Any, Throwable, Server]
+```
+
+Creates a server with default configuration (port 8080).
+
+**Example:**
+```scala
+Server.serve(routes).provide(Server.default)
+```
+
+### Server.defaultWithPort
+
+```scala
+def defaultWithPort(port: Int): ZLayer[Any, Throwable, Server]
+```
+
+Creates a server on a specific port.
+
+<ParamField path="port" type="Int" required>
+  The port number to bind to
+</ParamField>
+
+**Example:**
+```scala
+Server.serve(routes).provide(Server.defaultWithPort(9000))
+```
+
+### Server.defaultWith
+
+```scala
+def defaultWith(f: Config => Config): ZLayer[Any, Throwable, Server]
+```
+
+Creates a server with custom configuration.
+
+<ParamField path="f" type="Config => Config" required>
+  Configuration transformation function
+</ParamField>
+
+**Example:**
+```scala
+Server.serve(routes).provide(
+  Server.defaultWith(_.port(9000).idleTimeout(60.seconds))
+)
+```
+
+## Server Operations
+
+### serve
+
+```scala
+def serve[R](routes: Routes[R, Response])(implicit trace: Trace, tag: EnvironmentTag[R]): URIO[R & Server, Nothing]
+```
+
+Serves routes and runs the server until interrupted.
+
+<ParamField path="routes" type="Routes[R, Response]" required>
+  The routes to serve
+</ParamField>
+
+<ResponseField name="return" type="URIO[R & Server, Nothing]">
+  Effect that runs the server until interrupted
+</ResponseField>
+
+### install
+
+```scala
+def install[R](routes: Routes[R, Response])(implicit trace: Trace, tag: EnvironmentTag[R]): URIO[R, Unit]
+```
+
+Installs routes into a running server.
+
+### port
+
+```scala
+def port: UIO[Int]
+```
+
+Returns the port the server is listening on.
+
+<ResponseField name="return" type="UIO[Int]">
+  The server port number
+</ResponseField>
+
+## Configuration
+
+See [Server Configuration](/server/configuration) for detailed configuration options.
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Server Overview" href="/server/overview">
+    Server concepts and usage
+  </Card>
+  <Card title="Configuration" href="/server/configuration">
+    Server configuration options
+  </Card>
+  <Card title="SSL/TLS" href="/server/ssl-tls">
+    SSL/TLS configuration
+  </Card>
+  <Card title="Routes" href="/api/routes">
+    Routes API reference
+  </Card>
+</CardGroup>

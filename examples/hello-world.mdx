@@ -1,0 +1,162 @@
+---
+title: Hello World
+description: Build your first ZIO HTTP server with a simple Hello World application
+---
+
+This example demonstrates how to create a basic HTTP server with ZIO HTTP. You'll learn how to define routes, handle requests, and serve responses in both plain text and JSON formats.
+
+## Complete Example
+
+Here's a complete, runnable Hello World application:
+
+```scala
+//> using dep "dev.zio::zio-http:3.4.0"
+
+package example
+
+import zio._
+import zio.http._
+
+object HelloWorld extends ZIOAppDefault {
+  // Responds with plain text
+  val homeRoute =
+    Method.GET / Root -> handler(Response.text("Hello World!"))
+
+  // Responds with JSON
+  val jsonRoute =
+    Method.GET / "json" -> handler(Response.json(""">{"greetings": "Hello World!"}"""))
+
+  // Create HTTP route
+  val app = Routes(homeRoute, jsonRoute)
+
+  // Run it like any simple app
+  override val run = Server.serve(app).provide(Server.default)
+}
+```
+
+## What This Example Demonstrates
+
+This example shows the fundamental building blocks of a ZIO HTTP application:
+
+- **Route Definition**: How to define HTTP routes using path patterns and methods
+- **Response Types**: Serving both plain text and JSON responses
+- **Server Setup**: Configuring and starting a server with default settings
+- **ZIO Integration**: Using `ZIOAppDefault` for application lifecycle management
+
+## Step-by-Step Walkthrough
+
+<Steps>
+
+### Define a Plain Text Route
+
+The first route responds to GET requests at the root path (`/`) with plain text:
+
+```scala
+val homeRoute =
+  Method.GET / Root -> handler(Response.text("Hello World!"))
+```
+
+- `Method.GET` specifies the HTTP method
+- `/ Root` defines the path (in this case, the root path)
+- `handler(Response.text(...))` creates a handler that returns a text response
+
+### Define a JSON Route
+
+The second route responds to GET requests at `/json` with a JSON response:
+
+```scala
+val jsonRoute =
+  Method.GET / "json" -> handler(Response.json(""">{"greetings": "Hello World!"}"""))
+```
+
+- `/ "json"` defines the path as `/json`
+- `Response.json(...)` automatically sets the `Content-Type` header to `application/json`
+
+### Combine Routes
+
+Multiple routes are combined into a single `Routes` object:
+
+```scala
+val app = Routes(homeRoute, jsonRoute)
+```
+
+This creates a routing table that ZIO HTTP uses to match incoming requests.
+
+### Start the Server
+
+Finally, serve the application on the default port (8080):
+
+```scala
+override val run = Server.serve(app).provide(Server.default)
+```
+
+- `Server.serve(app)` creates a server that serves your routes
+- `.provide(Server.default)` provides the default server configuration (port 8080)
+
+</Steps>
+
+## How to Run
+
+There are two ways to run this example:
+
+### Using Scala CLI
+
+```bash
+scala-cli run HelloWorld.scala
+```
+
+The `//> using dep` directive at the top automatically downloads the ZIO HTTP dependency.
+
+### Using sbt
+
+Add to your `build.sbt`:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http" % "3.4.0"
+```
+
+Then run:
+
+```bash
+sbt run
+```
+
+## Test the Server
+
+Once the server is running, test it with these commands:
+
+```bash
+# Test the plain text endpoint
+curl http://localhost:8080/
+# Output: Hello World!
+
+# Test the JSON endpoint
+curl http://localhost:8080/json
+# Output: {"greetings": "Hello World!"}
+```
+
+## Expected Output
+
+When you start the server, you should see:
+
+```
+Started server on port: 8080
+```
+
+The server will continue running and handling requests until you stop it (Ctrl+C).
+
+## Key Takeaways
+
+- **Simple Syntax**: ZIO HTTP provides a clean, functional API for defining routes
+- **Type Safety**: Routes are type-safe and composable
+- **Multiple Response Types**: Easily return different content types (text, JSON, etc.)
+- **Default Configuration**: `Server.default` provides sensible defaults for quick prototyping
+- **ZIO Integration**: Seamless integration with the ZIO ecosystem
+
+## Next Steps
+
+Now that you have a basic server running, explore:
+
+- [REST API](/examples/rest-api) - Build a complete REST API with CRUD operations
+- [Request Handling](/docs/request) - Learn about extracting data from requests
+- [Middleware](/docs/middleware) - Add cross-cutting concerns like logging and CORS

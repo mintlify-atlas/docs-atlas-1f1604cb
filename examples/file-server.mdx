@@ -1,0 +1,365 @@
+---
+title: File Server
+description: Serve static files and handle file uploads with streaming support
+---
+
+This example demonstrates how to build a file server using ZIO HTTP. You'll learn how to serve static files, stream large files efficiently, handle different content types, and serve resources from your application's classpath.
+
+## Complete Example
+
+Here's a complete file server with multiple serving strategies:
+
+```scala
+//> using dep "dev.zio::zio-http:3.4.0"
+
+package example
+
+import java.io.File
+import java.nio.file.Paths
+import zio._
+import zio.stream.ZStream
+import zio.http._
+
+object FileServer extends ZIOAppDefault {
+
+  // Create HTTP route
+  val app = Routes(
+    Method.GET / "health" -> Handler.ok,
+
+    // Read the file as ZStream
+    // Uses the blocking version of ZStream.fromFile
+    Method.GET / "blocking" -> Handler.fromStreamChunked(
+      ZStream.fromPath(Paths.get("README.md"))
+    ),
+
+    // Uses netty's capability to write file content to the Channel
+    // Content-type response headers are automatically identified and added
+    // Adds content-length header and does not use Chunked transfer encoding
+    Method.GET / "video" -> Handler.fromFile(
+      new File("src/main/resources/TestVideoFile.mp4")
+    ),
+    
+    Method.GET / "text" -> Handler.fromFile(
+      new File("src/main/resources/TestFile.txt")
+    ),
+  ).sandbox
+
+  // Run it like any simple app
+  val run = Server.serve(app).provide(Server.default)
+}
+```
+
+## What This Example Demonstrates
+
+This file server example showcases several file-serving patterns:
+
+- **Static File Serving**: Serving files from the filesystem
+- **Streaming**: Efficiently serving large files using streams
+- **Content Type Detection**: Automatic MIME type detection
+- **Resource Serving**: Serving files from application resources
+- **Zero-Copy Transfer**: Using Netty's zero-copy file transfer
+
+## Step-by-Step Walkthrough
+
+<Steps>
+
+### Health Check Endpoint
+
+Start with a simple health check:
+
+```scala
+Method.GET / "health" -> Handler.ok
+```
+
+This returns a `200 OK` response with no body, useful for monitoring.
+
+### Stream Files with ZStream
+
+Serve files using ZIO's streaming capabilities:
+
+```scala
+Method.GET / "blocking" -> Handler.fromStreamChunked(
+  ZStream.fromPath(Paths.get("README.md"))
+)
+```
+
+This approach:
+- Reads files in chunks (doesn't load entire file into memory)
+- Uses chunked transfer encoding
+- Handles backpressure automatically
+- Works with files of any size
+
+### Efficient File Serving with Netty
+
+For optimal performance, use Netty's zero-copy file transfer:
+
+```scala
+Method.GET / "video" -> Handler.fromFile(
+  new File("src/main/resources/TestVideoFile.mp4")
+)
+```
+
+Benefits:
+- Automatic content-type detection (sets `Content-Type: video/mp4`)
+- Adds `Content-Length` header
+- Uses zero-copy transfer (very efficient for large files)
+- No chunked encoding (better for media files)
+
+### Serve Multiple File Types
+
+The same pattern works for any file type:
+
+```scala
+Method.GET / "text" -> Handler.fromFile(
+  new File("src/main/resources/TestFile.txt")
+)
+```
+
+ZIO HTTP automatically detects the content type based on file extension.
+
+### Error Handling with Sandbox
+
+Wrap routes in `.sandbox` for safe error handling:
+
+```scala
+Routes(
+  // ... your routes
+).sandbox
+```
+
+This catches and properly handles exceptions like:
+- File not found
+- Permission denied
+- I/O errors
+
+</Steps>
+
+## Serving Static Resources
+
+To serve an entire directory of static files (like a `public` folder), use middleware:
+
+```scala
+object StaticFileServer extends ZIOAppDefault {
+
+  /**
+   * Serves all files from the resources directory under /static
+   * Example: /static/css/style.css maps to resources/css/style.css
+   */
+  val routes = Routes.empty @@ Middleware.serveResources(
+    Path.empty / "static"
+  )
+
+  override def run = Server.serve(routes).provide(Server.default)
+}
+```
+
+### Serve from Filesystem Directory
+
+To serve files from a filesystem directory instead of resources:
+
+```scala
+import java.nio.file.Paths
+
+val routes = Routes.empty @@ Middleware.serveDirectory(
+  path = Path.empty / "files",
+  directory = Paths.get("/var/www/public")
+)
+```
+
+Now `/files/image.png` serves `/var/www/public/image.png`.
+
+## How to Run
+
+Save the code and run it:
+
+```bash
+scala-cli run FileServer.scala
+```
+
+## Test the Server
+
+Test different endpoints:
+
+```bash
+# Health check
+curl http://localhost:8080/health
+# Output: (empty 200 OK response)
+
+# Download a text file
+curl http://localhost:8080/text
+# Output: (contents of TestFile.txt)
+
+# Stream a file
+curl http://localhost:8080/blocking > downloaded-readme.md
+
+# Download a video (with progress)
+curl -O http://localhost:8080/video
+
+# Check headers
+curl -I http://localhost:8080/video
+# Output includes:
+# Content-Type: video/mp4
+# Content-Length: 1234567
+```
+
+## Expected Output
+
+When you start the server:
+
+```
+Started server on port: 8080
+```
+
+Successful file requests return:
+- Appropriate `Content-Type` headers
+- `Content-Length` for non-streamed files
+- `Transfer-Encoding: chunked` for streamed files
+
+File not found returns `404 Not Found`.
+
+## Advanced: File Upload with Streaming
+
+Here's how to handle file uploads efficiently:
+
+```scala
+object FileUploadServer extends ZIOAppDefault {
+  
+  val routes = Routes(
+    // Upload a file
+    Method.POST / "upload" -> handler { (req: Request) =>
+      for {
+        // Get the uploaded stream
+        stream <- ZIO.succeed(req.body.asStream)
+        
+        // Write to a file
+        _ <- stream.run(
+          ZSink.fromFileName("uploads/uploaded-file.dat")
+        )
+        
+      } yield Response.text("File uploaded successfully!")
+    },
+    
+    // Upload with multipart form data
+    Method.POST / "upload-form" -> handler { (req: Request) =>
+      for {
+        form <- req.body.asMultipartForm
+        
+        // Get the uploaded file
+        file <- ZIO.fromOption(
+          form.map(_.get("file")).get
+        ).orElseFail(Response.badRequest("No file uploaded"))
+        
+        // Access file properties
+        filename = file.filename.getOrElse("unknown")
+        contentType = file.contentType
+        
+        // Save the file
+        _ <- file.asStream.run(
+          ZSink.fromFileName(s"uploads/$filename")
+        )
+        
+      } yield Response.text(s"Uploaded $filename ($contentType)")
+    }
+  )
+  
+  override val run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## Test File Upload
+
+```bash
+# Upload a file with raw body
+curl -X POST \
+  --data-binary @localfile.txt \
+  http://localhost:8080/upload
+
+# Upload with multipart form
+curl -X POST \
+  -F "file=@image.png" \
+  http://localhost:8080/upload-form
+```
+
+## Advanced: Serve with Range Requests
+
+For video streaming and resumable downloads, enable range request support:
+
+```scala
+val routes = Routes(
+  Method.GET / "video" / string("filename") -> handler { 
+    (filename: String, req: Request) =>
+      val file = new File(s"videos/$filename")
+      
+      // Handler.fromFile automatically supports range requests
+      Handler.fromFile(file).toResponse
+  }
+) @@ Middleware.requestLogging()
+```
+
+Clients can now request specific byte ranges:
+
+```bash
+# Request first 1MB of a video
+curl -H "Range: bytes=0-1048575" \
+  http://localhost:8080/video/movie.mp4
+```
+
+## Security Considerations
+
+<Warning>
+  When serving user-specified files, always validate paths to prevent directory traversal attacks.
+</Warning>
+
+Safe path validation example:
+
+```scala
+import java.nio.file.{Files, Path, Paths}
+
+def safeFilePath(baseDir: Path, userPath: String): IO[Response, Path] = {
+  val requested = baseDir.resolve(userPath).normalize()
+  
+  ZIO.attempt {
+    // Ensure the resolved path is still within baseDir
+    if (!requested.startsWith(baseDir)) {
+      throw new SecurityException("Path traversal detected")
+    }
+    
+    // Ensure file exists and is readable
+    if (!Files.exists(requested) || !Files.isReadable(requested)) {
+      throw new java.io.FileNotFoundException()
+    }
+    
+    requested
+  }.mapError {
+    case _: SecurityException => Response.forbidden
+    case _: java.io.FileNotFoundException => Response.notFound
+    case _ => Response.internalServerError
+  }
+}
+
+// Usage:
+Method.GET / "files" / string("path") -> handler { 
+  (userPath: String, _: Request) =>
+    for {
+      safePath <- safeFilePath(Paths.get("/var/www/public"), userPath)
+      response <- Handler.fromFile(safePath.toFile).toResponse
+    } yield response
+}
+```
+
+## Key Takeaways
+
+- **Multiple Strategies**: Choose between streaming (`fromStreamChunked`) and zero-copy (`fromFile`) based on your needs
+- **Automatic Headers**: Content-Type and Content-Length are set automatically
+- **Memory Efficient**: Streaming prevents loading large files into memory
+- **Resource Serving**: Use `Middleware.serveResources` for classpath resources
+- **Directory Serving**: Use `Middleware.serveDirectory` for filesystem directories
+- **Safety**: Always use `.sandbox` and validate user-provided paths
+- **Range Requests**: Supported automatically for video streaming and resumable downloads
+
+## Next Steps
+
+- [REST API](/examples/rest-api) - Build APIs that work with JSON data
+- [Middleware](/docs/middleware) - Add caching, compression, and CORS
+- [Streaming](/docs/streaming) - Learn more about stream processing
+- [Security](/docs/security) - Implement authentication and authorization

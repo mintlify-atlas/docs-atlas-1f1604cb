@@ -1,0 +1,351 @@
+---
+title: Server Configuration
+description: Configure ZIO HTTP servers with ports, addresses, timeouts, compression, and more
+---
+
+The `Server.Config` provides comprehensive configuration options for customizing server behavior, from network settings to performance optimizations.
+
+## Basic Configuration
+
+### Port and Address
+
+Configure the server's listening port and address:
+
+```scala
+val config = Server.Config.default
+  .port(8080)
+  .binding("0.0.0.0", 8080)
+```
+
+**Available methods:**
+
+- `port(port: Int)`: Set the port (default: 8080)
+- `binding(hostname: String, port: Int)`: Set hostname and port
+- `binding(address: InetAddress, port: Int)`: Set InetAddress and port
+- `binding(inetSocketAddress: InetSocketAddress)`: Set full socket address
+- `onAnyOpenPort`: Bind to any available port (port 0)
+
+**Example - Dynamic Port:**
+
+```scala
+val dynamicServer = Server.defaultWith(_.onAnyOpenPort)
+
+val program = for {
+  port <- Server.install(routes)
+  _    <- Console.printLine(s"Server started on dynamic port: $port")
+  _    <- ZIO.never
+} yield ()
+
+program.provide(dynamicServer)
+```
+
+## Connection Settings
+
+### Keep-Alive
+
+Enable or disable HTTP keep-alive connections:
+
+```scala
+val config = Server.Config.default
+  .keepAlive(true)  // default: true
+```
+
+When enabled, uses Netty's `HttpServerKeepAliveHandler` to manage persistent connections.
+
+### TCP_NODELAY
+
+Control Nagle's algorithm for TCP packets:
+
+```scala
+val config = Server.Config.default
+  .tcpNoDelay(true)  // default: true
+```
+
+Disabling Nagle's algorithm (setting to `true`) reduces latency for small messages.
+
+### Socket Backlog
+
+Set the maximum number of queued connection requests:
+
+```scala
+val config = Server.Config.default
+  .soBacklog(100)  // default: 100
+```
+
+## Timeouts
+
+### Idle Timeout
+
+Close connections that are idle for a specified duration:
+
+```scala
+val config = Server.Config.default
+  .idleTimeout(30.seconds)
+```
+
+Disable idle timeout:
+
+```scala
+val config = Server.Config.default.noIdleTimeout
+```
+
+### Graceful Shutdown Timeout
+
+Maximum time to wait for in-flight requests during shutdown:
+
+```scala
+val config = Server.Config.default
+  .gracefulShutdownTimeout(10.seconds)  // default: 10 seconds
+```
+
+## Request and Response Processing
+
+### Request Streaming
+
+Control how request bodies are handled:
+
+```scala
+// Enable streaming for all request bodies
+val streamingConfig = Server.Config.default.enableRequestStreaming
+
+// Disable streaming - reject bodies larger than maxContentLength
+val noStreamingConfig = Server.Config.default
+  .disableRequestStreaming(maxContentLength = 1024 * 100)
+
+// Hybrid mode - aggregate up to a size, stream if larger
+val hybridConfig = Server.Config.default
+  .hybridRequestStreaming(maxAggregatedLength = 1024 * 100)
+```
+
+**Default:** `RequestStreaming.Disabled(1024 * 100)` - 100KB limit
+
+### Request Decompression
+
+Automatically decompress gzip/deflate encoded request bodies:
+
+```scala
+val config = Server.Config.default
+  .requestDecompression(isStrict = true)
+```
+
+**Options:**
+- `isStrict = true`: Strict decompression (default: No decompression)
+- `isStrict = false`: Non-strict decompression
+
+### Response Compression
+
+Automatically compress response bodies:
+
+```scala
+import zio.http.Server.Config.ResponseCompressionConfig
+import zio.http.Server.Config.CompressionOptions
+
+val compressionConfig = ResponseCompressionConfig(
+  contentThreshold = 1024,  // Minimum size in bytes to compress
+  options = IndexedSeq(
+    CompressionOptions.gzip(level = 6, bits = 15, mem = 8),
+    CompressionOptions.deflate(level = 6, bits = 15, mem = 8),
+    CompressionOptions.brotli(quality = 4, lgwin = -1, mode = CompressionOptions.Mode.Text)
+  )
+)
+
+val config = Server.Config.default.responseCompression(compressionConfig)
+```
+
+**Compression Parameters:**
+
+<Accordion title="GZip / Deflate Options">
+- `level`: Compression level (1-9). 1 = fastest, 9 = best compression, 0 = no compression (default: 6)
+- `bits`: Window bits, controls history buffer size (9-15). Larger = better compression (default: 15)
+- `mem`: Memory level (1-9). Higher = better/faster compression, more memory (default: 8)
+</Accordion>
+
+<Accordion title="Brotli Options">
+- `quality`: Compression quality (0-11), similar to level (default: 4)
+- `lgwin`: Window size parameter (default: -1)
+- `mode`: Compression mode - `Generic`, `Text`, or `Font` (default: Text)
+</Accordion>
+
+**Default compression:**
+
+```scala
+val defaultCompression = ResponseCompressionConfig.default
+// contentThreshold = 0 (compress everything)
+// options = gzip() + deflate()
+```
+
+## Header and Line Size Limits
+
+### Maximum Initial Line Length
+
+Set the maximum length for the HTTP request line:
+
+```scala
+val config = Server.Config.default
+  .maxInitialLineLength(4096)  // default: 4096 bytes
+```
+
+### Maximum Header Size
+
+Set the maximum total size for all HTTP headers:
+
+```scala
+val config = Server.Config.default
+  .maxHeaderSize(8192)  // default: 8192 bytes
+```
+
+## Advanced Settings
+
+### Accept Continue
+
+Handle HTTP 100-Continue expectations:
+
+```scala
+val config = Server.Config.default
+  .acceptContinue(true)  // default: false
+```
+
+When enabled, uses Netty's `HttpServerExpectContinueHandler` to send 100-Continue responses.
+
+### Context Switching Optimization
+
+Execute requests within the server's IO thread-pool until the first async boundary:
+
+```scala
+val config = Server.Config.default
+  .avoidContextSwitching(true)  // default: false
+```
+
+<Warning>
+**Use with caution:** Improves performance for short-lived CPU-bound tasks, but can degrade performance for CPU-heavy work.
+
+**Never use with virtual threads!** This setting is incompatible with ZIO executor configured for virtual threads.
+</Warning>
+
+### Generate HEAD Routes
+
+Automatically generate HEAD endpoints for GET routes:
+
+```scala
+val config = Server.Config.default
+  .generateHeadRoutes(true)  // default: false
+```
+
+### Error Logging
+
+Log warnings when error responses cannot be sent:
+
+```scala
+val config = Server.Config.default
+  .logWarningOnFatalError(true)  // default: true
+```
+
+## Complete Configuration Example
+
+```scala
+import zio._
+import zio.http._
+import java.net.InetSocketAddress
+
+val productionConfig = Server.Config.default
+  .binding("0.0.0.0", 443)
+  .ssl(SSLConfig.fromFile("cert.pem", "key.pem"))
+  .keepAlive(true)
+  .tcpNoDelay(true)
+  .soBacklog(200)
+  .idleTimeout(60.seconds)
+  .gracefulShutdownTimeout(30.seconds)
+  .enableRequestStreaming
+  .requestDecompression(isStrict = true)
+  .responseCompression()
+  .maxHeaderSize(16384)
+  .maxInitialLineLength(8192)
+  .logWarningOnFatalError(true)
+
+val app = Server.serve(routes).provide(
+  ZLayer.succeed(productionConfig) >>> Server.live
+)
+```
+
+## Configuration via File
+
+Load configuration from `application.conf`:
+
+```hocon
+zio.http.server {
+  binding-host = "0.0.0.0"
+  binding-port = 8080
+  keep-alive = true
+  tcp-nodelay = true
+  so-backlog = 128
+  
+  idle-timeout = 60s
+  graceful-shutdown-timeout = 30s
+  
+  max-header-size = 16384
+  max-initial-line-length = 8192
+  
+  request-decompression {
+    enabled = true
+  }
+  
+  response-compression {
+    content-threshold = 1024
+    options = [
+      {
+        type = "gzip"
+        level = 6
+        bits = 15
+        mem = 8
+      },
+      {
+        type = "deflate"
+        level = 6
+      }
+    ]
+  }
+  
+  request-streaming {
+    enabled = false
+    maximum-content-length = 102400
+  }
+  
+  avoid-context-switching = false
+  log-warning-on-fatal-error = true
+}
+```
+
+Load in code:
+
+```scala
+val app = Server.serve(routes).provide(
+  Server.configured()  // Loads from zio.http.server path
+)
+```
+
+## WebSocket Configuration
+
+Configure WebSocket-specific settings:
+
+```scala
+val wsConfig = WebSocketConfig.default
+  .handshakeTimeout(10.seconds)
+  .forceCloseTimeout(5.seconds)
+  .subProtocol(Some("chat"))
+
+val config = Server.Config.default
+  .webSocketConfig(wsConfig)
+```
+
+See [WebSockets](/server/websockets) for more details.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SSL/TLS" icon="lock" href="/server/ssl-tls">
+    Configure HTTPS and certificates
+  </Card>
+  <Card title="WebSockets" icon="plug" href="/server/websockets">
+    WebSocket configuration options
+  </Card>
+</CardGroup>

@@ -1,0 +1,564 @@
+---
+title: "File Upload Handling"
+description: "Handle file uploads in ZIO HTTP using multipart/form-data with streaming support"
+---
+
+ZIO HTTP provides robust support for handling file uploads through multipart/form-data requests. This guide covers both in-memory and streaming approaches for processing uploaded files.
+
+## Understanding Multipart Form Data
+
+Multipart form data (`multipart/form-data`) is the standard encoding type for file uploads. It allows sending files and form fields in a single HTTP request.
+
+A multipart request contains:
+- **Boundary** - A unique delimiter separating form fields
+- **Form fields** - Text data (username, description, etc.)
+- **Binary fields** - File data with content type and filename
+
+## Basic File Upload
+
+### Simple Upload Handler
+
+Handle a single file upload:
+
+```scala
+import zio._
+import zio.http._
+
+val uploadRoute = 
+  Method.POST / "upload" ->
+    handler { (req: Request) =>
+      if (req.header(Header.ContentType).exists(_.mediaType == MediaType.multipart.`form-data`))
+        for {
+          form <- req.body.asMultipartForm
+                    .mapError(ex =>
+                      Response.internalServerError(
+                        s"Failed to decode multipart/form-data (${ex.getMessage})"
+                      )
+                    )
+          response <- form.get("file") match {
+            case Some(FormField.Binary(_, data, contentType, _, filename)) =>
+              ZIO.succeed(
+                Response.text(
+                  s"Received ${data.length} bytes of $contentType " +
+                  s"filename ${filename.getOrElse("unknown")}"
+                )
+              )
+            case Some(_) =>
+              ZIO.fail(
+                Response.badRequest("Field 'file' must be a binary file")
+              )
+            case None =>
+              ZIO.fail(Response.badRequest("Missing 'file' field"))
+          }
+        } yield response
+      else 
+        ZIO.succeed(Response.notFound)
+    }
+```
+
+### Saving Files to Disk
+
+Save uploaded files to the filesystem:
+
+```scala
+import java.nio.file.{Files, Paths, StandardOpenOption}
+import zio._
+import zio.http._
+
+val uploadRoute = 
+  Method.POST / "upload" ->
+    handler { (req: Request) =>
+      for {
+        form <- req.body.asMultipartForm
+                  .orElseFail(Response.badRequest("Invalid multipart data"))
+        file <- ZIO.fromOption(form.get("file"))
+                  .orElseFail(Response.badRequest("Missing 'file' field"))
+        result <- file match {
+          case FormField.Binary(_, data, contentType, _, filename) =>
+            val name = filename.getOrElse(s"upload-${System.currentTimeMillis()}")
+            val path = Paths.get(s"uploads/$name")
+            
+            for {
+              _ <- ZIO.attempt(Files.createDirectories(path.getParent))
+                     .orElseFail(Response.internalServerError("Failed to create directory"))
+              _ <- ZIO.attempt(
+                     Files.write(path, data.toArray, StandardOpenOption.CREATE)
+                   ).orElseFail(Response.internalServerError("Failed to save file"))
+            } yield Response.json(s"""{
+              "filename": "$name",
+              "size": ${data.length},
+              "contentType": "$contentType",
+              "path": "${path.toString}"
+            }""")
+          
+          case _ =>
+            ZIO.fail(Response.badRequest("Invalid file field"))
+        }
+      } yield result
+    }
+```
+
+<Info>
+Ensure the `uploads/` directory exists and has proper write permissions.
+</Info>
+
+## Streaming File Uploads
+
+For large files, use streaming to avoid loading the entire file into memory:
+
+```scala
+import zio._
+import zio.http._
+import zio.stream._
+import java.nio.file.{Paths, StandardOpenOption}
+
+val streamingUploadRoute =
+  Method.POST / "upload" / "stream" ->
+    handler { (req: Request) =>
+      for {
+        form <- req.body.asMultipartFormStream
+                  .orElseFail(Response.badRequest("Invalid multipart data"))
+        result <- form.fields.runCollect.flatMap { fields =>
+          fields.find(_.name == "file") match {
+            case Some(field: FormField.StreamingBinary) =>
+              val filename = field.filename.getOrElse(s"upload-${System.currentTimeMillis()}")
+              val path = Paths.get(s"uploads/$filename")
+              
+              field.data
+                .run(
+                  ZSink.fromFile(path, StandardOpenOption.CREATE)
+                )
+                .as(
+                  Response.json(s"""{
+                    "filename": "$filename",
+                    "contentType": "${field.contentType}",
+                    "path": "${path.toString}"
+                  }""")
+                )
+                .orElseFail(Response.internalServerError("Failed to save file"))
+            
+            case Some(_) =>
+              ZIO.fail(Response.badRequest("Field 'file' must be binary"))
+            
+            case None =>
+              ZIO.fail(Response.badRequest("Missing 'file' field"))
+          }
+        }
+      } yield result
+    }
+```
+
+Streaming advantages:
+- **Memory efficient** - Processes chunks without loading entire file
+- **Large file support** - Handle files larger than available memory
+- **Better performance** - Start processing while still receiving data
+
+## Multiple File Uploads
+
+### Handling Multiple Files
+
+```scala
+import zio._
+import zio.http._
+
+case class UploadResult(
+  filename: String,
+  size: Long,
+  contentType: String,
+)
+
+val multiUploadRoute =
+  Method.POST / "upload" / "multiple" ->
+    handler { (req: Request) =>
+      for {
+        form <- req.body.asMultipartForm
+                  .orElseFail(Response.badRequest("Invalid multipart data"))
+        
+        // Process all binary fields
+        results <- ZIO.foreach(form.formData.collect {
+          case field @ FormField.Binary(name, data, contentType, _, filename) =>
+            val name = filename.getOrElse(s"file-${System.currentTimeMillis()}")
+            val path = Paths.get(s"uploads/$name")
+            
+            ZIO.attempt {
+              Files.write(path, data.toArray, StandardOpenOption.CREATE)
+              UploadResult(name, data.length, contentType.toString)
+            }
+        })(identity)
+        
+      } yield Response.json(results.toJson)
+    }
+```
+
+### Named File Fields
+
+Handle multiple named file fields:
+
+```scala
+val multiFieldUploadRoute =
+  Method.POST / "upload" / "profile" ->
+    handler { (req: Request) =>
+      for {
+        form <- req.body.asMultipartForm
+                  .orElseFail(Response.badRequest("Invalid multipart data"))
+        
+        // Get specific fields
+        avatar <- ZIO.fromOption(form.get("avatar"))
+                    .orElseFail(Response.badRequest("Missing 'avatar' field"))
+        cover  <- ZIO.fromOption(form.get("cover"))
+                    .orElseFail(Response.badRequest("Missing 'cover' field"))
+        
+        // Process each file
+        avatarPath <- saveFile(avatar, "avatar")
+        coverPath  <- saveFile(cover, "cover")
+        
+      } yield Response.json(s"""{
+        "avatar": "$avatarPath",
+        "cover": "$coverPath"
+      }""")
+    }
+
+def saveFile(field: FormField, prefix: String): IO[Response, String] =
+  field match {
+    case FormField.Binary(_, data, _, _, filename) =>
+      val name = filename.getOrElse(s"$prefix-${System.currentTimeMillis()}")
+      val path = Paths.get(s"uploads/$name")
+      
+      ZIO.attempt(Files.write(path, data.toArray))
+        .as(path.toString)
+        .orElseFail(Response.internalServerError("Failed to save file"))
+    
+    case _ =>
+      ZIO.fail(Response.badRequest(s"Invalid file field: $prefix"))
+  }
+```
+
+## File Upload with Metadata
+
+Combine file uploads with form data:
+
+```scala
+import zio._
+import zio.http._
+import zio.json._
+
+case class FileMetadata(
+  title: String,
+  description: String,
+  tags: List[String],
+)
+
+object FileMetadata {
+  implicit val codec: JsonCodec[FileMetadata] = DeriveJsonCodec.gen
+}
+
+val uploadWithMetadataRoute =
+  Method.POST / "upload" / "document" ->
+    handler { (req: Request) =>
+      for {
+        form <- req.body.asMultipartForm
+                  .orElseFail(Response.badRequest("Invalid multipart data"))
+        
+        // Extract text fields
+        title       <- getTextField(form, "title")
+        description <- getTextField(form, "description")
+        tags        <- getTextField(form, "tags")
+                         .map(_.split(",").toList)
+        
+        metadata = FileMetadata(title, description, tags)
+        
+        // Extract and save file
+        file <- ZIO.fromOption(form.get("file"))
+                  .orElseFail(Response.badRequest("Missing 'file' field"))
+        
+        filePath <- file match {
+          case FormField.Binary(_, data, contentType, _, filename) =>
+            val name = filename.getOrElse(s"doc-${System.currentTimeMillis()}")
+            val path = Paths.get(s"uploads/$name")
+            
+            ZIO.attempt(Files.write(path, data.toArray))
+              .as(path.toString)
+              .orElseFail(Response.internalServerError("Failed to save file"))
+          
+          case _ =>
+            ZIO.fail(Response.badRequest("Invalid file field"))
+        }
+        
+        // Store metadata in database
+        _ <- DocumentService.create(filePath, metadata)
+               .orElseFail(Response.internalServerError("Failed to store metadata"))
+        
+      } yield Response.json(s"""{
+        "path": "$filePath",
+        "metadata": ${metadata.toJson}
+      }""")
+    }
+
+def getTextField(form: Form, name: String): IO[Response, String] =
+  ZIO.fromOption(form.get(name).flatMap(_.stringValue))
+    .orElseFail(Response.badRequest(s"Missing '$name' field"))
+```
+
+## Validation and Security
+
+### Validate File Type
+
+```scala
+val allowedTypes = Set(
+  MediaType.image.jpeg,
+  MediaType.image.png,
+  MediaType.image.gif,
+  MediaType.application.pdf,
+)
+
+def validateFileType(contentType: MediaType): IO[Response, Unit] =
+  ZIO.when(!allowedTypes.contains(contentType))(
+    ZIO.fail(Response.badRequest(s"File type $contentType not allowed"))
+  )
+
+val validatedUploadRoute =
+  Method.POST / "upload" ->
+    handler { (req: Request) =>
+      for {
+        form <- req.body.asMultipartForm
+                  .orElseFail(Response.badRequest("Invalid multipart data"))
+        
+        file <- ZIO.fromOption(form.get("file"))
+                  .orElseFail(Response.badRequest("Missing 'file' field"))
+        
+        result <- file match {
+          case FormField.Binary(_, data, contentType, _, filename) =>
+            for {
+              _ <- validateFileType(contentType)
+              _ <- validateFileSize(data.length)
+              path <- saveFile(data, filename)
+            } yield Response.json(s"""{
+              "filename": "${filename.getOrElse("unknown")}",
+              "size": ${data.length}
+            }""")
+          
+          case _ =>
+            ZIO.fail(Response.badRequest("Invalid file field"))
+        }
+      } yield result
+    }
+```
+
+### Validate File Size
+
+```scala
+val maxFileSize = 10 * 1024 * 1024 // 10 MB
+
+def validateFileSize(size: Long): IO[Response, Unit] =
+  ZIO.when(size > maxFileSize)(
+    ZIO.fail(Response.badRequest(s"File size $size exceeds maximum $maxFileSize"))
+  )
+```
+
+### Sanitize Filenames
+
+```scala
+import java.nio.file.Paths
+
+def sanitizeFilename(filename: String): String = {
+  // Remove path traversal attempts
+  val name = Paths.get(filename).getFileName.toString
+  
+  // Remove special characters
+  name.replaceAll("[^a-zA-Z0-9.-]", "_")
+}
+
+val secureUploadRoute =
+  Method.POST / "upload" ->
+    handler { (req: Request) =>
+      for {
+        form <- req.body.asMultipartForm
+                  .orElseFail(Response.badRequest("Invalid multipart data"))
+        
+        file <- ZIO.fromOption(form.get("file"))
+                  .orElseFail(Response.badRequest("Missing 'file' field"))
+        
+        result <- file match {
+          case FormField.Binary(_, data, contentType, _, filename) =>
+            val safeName = sanitizeFilename(
+              filename.getOrElse(s"upload-${System.currentTimeMillis()}")
+            )
+            val path = Paths.get(s"uploads/$safeName")
+            
+            ZIO.attempt(Files.write(path, data.toArray))
+              .as(Response.json(s"""{"filename": "$safeName"}"""))
+              .orElseFail(Response.internalServerError("Failed to save file"))
+          
+          case _ =>
+            ZIO.fail(Response.badRequest("Invalid file field"))
+        }
+      } yield result
+    }
+```
+
+<Warning>
+Always sanitize filenames to prevent path traversal attacks. Never trust user-provided filenames directly.
+</Warning>
+
+## Testing File Uploads
+
+### Using ZIO HTTP Client
+
+Test uploads with ZIO HTTP client:
+
+```scala
+import zio._
+import zio.http._
+
+val testUpload = 
+  for {
+    client <- ZIO.service[Client]
+    response <- client.batched(
+      Request.post(
+        "/upload",
+        Body.fromMultipartForm(
+          Form(
+            FormField.binaryField(
+              "file",
+              Chunk.fromArray("Hello, world!".getBytes),
+              MediaType.text.plain,
+              filename = Some("hello.txt"),
+            ),
+            FormField.simpleField("title", "Test Document"),
+            FormField.simpleField("description", "A test file"),
+          ),
+          Boundary("AaB03x"),
+        ),
+      )
+    )
+    body <- response.body.asString
+    _ <- Console.printLine(s"Response: [${response.status}] $body")
+  } yield ()
+```
+
+### Using curl
+
+Test with curl:
+
+```bash
+# Single file upload
+curl -X POST http://localhost:8080/upload \
+  -F "file=@/path/to/file.pdf" \
+  -F "title=My Document" \
+  -F "description=Test upload"
+
+# Multiple files
+curl -X POST http://localhost:8080/upload/multiple \
+  -F "file1=@image1.jpg" \
+  -F "file2=@image2.jpg" \
+  -F "file3=@document.pdf"
+```
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+import java.nio.file.{Files, Paths, StandardOpenOption}
+
+object FileUploadServer extends ZIOAppDefault {
+  
+  val maxFileSize = 10 * 1024 * 1024 // 10 MB
+  val allowedTypes = Set(
+    MediaType.image.jpeg,
+    MediaType.image.png,
+    MediaType.application.pdf,
+  )
+  
+  def sanitizeFilename(filename: String): String =
+    Paths.get(filename).getFileName.toString
+      .replaceAll("[^a-zA-Z0-9.-]", "_")
+  
+  def validateFile(
+    contentType: MediaType,
+    size: Long,
+  ): IO[Response, Unit] = {
+    for {
+      _ <- ZIO.when(!allowedTypes.contains(contentType))(
+             ZIO.fail(Response.badRequest(s"File type not allowed: $contentType"))
+           )
+      _ <- ZIO.when(size > maxFileSize)(
+             ZIO.fail(Response.badRequest(s"File too large: $size bytes"))
+           )
+    } yield ()
+  }
+  
+  val routes = Routes(
+    Method.POST / "upload" ->
+      handler { (req: Request) =>
+        for {
+          form <- req.body.asMultipartForm
+                    .mapError(ex =>
+                      Response.badRequest(s"Invalid multipart data: ${ex.getMessage}")
+                    )
+          
+          file <- ZIO.fromOption(form.get("file"))
+                    .orElseFail(Response.badRequest("Missing 'file' field"))
+          
+          result <- file match {
+            case FormField.Binary(_, data, contentType, _, filename) =>
+              for {
+                _        <- validateFile(contentType, data.length)
+                safeName = sanitizeFilename(
+                             filename.getOrElse(s"upload-${System.currentTimeMillis()}")
+                           )
+                path     = Paths.get(s"uploads/$safeName")
+                _        <- ZIO.attempt(Files.createDirectories(path.getParent))
+                              .orElseFail(Response.internalServerError("Failed to create directory"))
+                _        <- ZIO.attempt(
+                              Files.write(path, data.toArray, StandardOpenOption.CREATE)
+                            ).orElseFail(Response.internalServerError("Failed to save file"))
+              } yield Response.json(s"""{
+                "filename": "$safeName",
+                "size": ${data.length},
+                "contentType": "$contentType",
+                "path": "${path.toString}"
+              }""")
+            
+            case _ =>
+              ZIO.fail(Response.badRequest("Field 'file' must be binary"))
+          }
+        } yield result
+      },
+  ).sandbox
+  
+  override val run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## Best Practices
+
+<Card title="Validate File Types" icon="file-check">
+Always validate content types to prevent malicious file uploads.
+</Card>
+
+<Card title="Limit File Sizes" icon="scale">
+Enforce maximum file sizes to prevent resource exhaustion.
+</Card>
+
+<Card title="Sanitize Filenames" icon="shield">
+Remove special characters and path traversal attempts from filenames.
+</Card>
+
+<Card title="Use Streaming for Large Files" icon="stream">
+Stream large files to disk instead of loading into memory.
+</Card>
+
+<Card title="Store Files Outside Web Root" icon="folder">
+Never store uploads in publicly accessible directories.
+</Card>
+
+<Card title="Scan for Viruses" icon="virus">
+Integrate virus scanning for uploaded files in production.
+</Card>
+
+## Next Steps
+
+- Learn about [Error Handling](/guides/error-handling) for upload failures
+- Explore [Authentication](/guides/authentication) to secure upload endpoints
+- Read about [Middleware](/concepts/middleware) for request size limits

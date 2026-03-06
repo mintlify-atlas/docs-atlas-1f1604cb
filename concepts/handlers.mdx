@@ -1,0 +1,404 @@
+---
+title: Handlers
+description: Transform requests into responses with ZIO HTTP handlers
+---
+
+A `Handler` transforms input into output, handling both success and failure cases. In ZIO HTTP, handlers are the core abstraction for processing HTTP requests.
+
+## Overview
+
+The `Handler` type represents a transformation from input to output with environment, error, and success types:
+
+```scala
+sealed trait Handler[-R, +Err, -In, +Out]
+```
+
+- **`R`**: Environment required by the handler
+- **`Err`**: Error type the handler may produce
+- **`In`**: Input type the handler accepts
+- **`Out`**: Output type the handler produces
+
+For HTTP applications, the most common handler type is:
+
+```scala
+type RequestHandler[R, Err] = Handler[R, Err, Request, Response]
+```
+
+## Creating Handlers
+
+### From Pure Values
+
+Create a handler that always succeeds with a constant value:
+
+```scala
+import zio.http._
+
+val handler: Handler[Any, Nothing, Any, Response] = 
+  Handler.succeed(Response.text("Hello, World!"))
+
+// Shorthand for common responses
+val okHandler = Handler.ok
+val notFoundHandler = Handler.notFound
+val errorHandler = Handler.internalServerError("Something went wrong")
+```
+
+### From Functions
+
+Create handlers from pure functions:
+
+```scala
+// Function from request to response
+val handler = Handler.fromFunction[Request] { request =>
+  Response.text(s"Path: ${request.path.encode}")
+}
+
+// Function with specific input type
+val uppercaseHandler = Handler.fromFunction[String] { text =>
+  text.toUpperCase
+}
+```
+
+### From Effects
+
+Create handlers from ZIO effects:
+
+```scala
+import zio._
+
+val handler = Handler.fromZIO {
+  ZIO.succeed(Response.text("Computed response"))
+}
+
+// With environment
+val dbHandler = Handler.fromZIO {
+  ZIO.serviceWithZIO[Database](_.getUsers)
+    .map(users => Response.json(users.toJson))
+}
+
+// From effectful function
+val asyncHandler = Handler.fromFunctionZIO[Request] { request =>
+  ZIO.attemptBlocking {
+    // Heavy computation
+    Response.text("Result")
+  }
+}
+```
+
+### From Responses
+
+Create handlers that return static responses:
+
+```scala
+val handler = Handler.fromResponse(
+  Response.text("Static content")
+    .addHeader(Header.ContentType(MediaType.text.plain))
+)
+
+// Status code shortcuts
+val badRequest = Handler.badRequest("Invalid input")
+val forbidden = Handler.forbidden
+val notFound = Handler.notFound("Resource not found")
+```
+
+### From Files
+
+Serve files from the filesystem:
+
+```scala
+import java.io.File
+import java.nio.charset.StandardCharsets
+
+val fileHandler = Handler.fromFile(
+  new File("/path/to/file.txt"),
+  charset = StandardCharsets.UTF_8
+)
+
+// From ZIO effect
+val dynamicFileHandler = Handler.fromFileZIO(
+  ZIO.attempt(new File("/path/to/file.pdf"))
+)
+```
+
+<Note>
+`fromFile` automatically handles content-type detection, range requests, ETags, and last-modified headers.
+</Note>
+
+## Handler Composition
+
+### Sequential Composition
+
+Chain handlers together:
+
+```scala
+val parseJson: Handler[Any, String, Request, JsonValue] = ???
+val validateData: Handler[Any, String, JsonValue, ValidData] = ???
+
+// Using >>> operator
+val combined = parseJson >>> validateData
+
+// Using andThen
+val combined2 = parseJson.andThen(validateData)
+```
+
+### Transformation
+
+Transform output values:
+
+```scala
+val handler: Handler[Any, Nothing, Request, String] = ???
+
+// Map output
+val upper = handler.map(_.toUpperCase)
+
+// FlatMap for dependent computations
+val dependent = handler.flatMap { text =>
+  Handler.fromZIO(ZIO.attempt(text.length))
+}
+
+// Map with effects
+val async = handler.mapZIO { text =>
+  ZIO.attemptBlocking(text.toUpperCase)
+}
+```
+
+### Contravariant Transformation
+
+Transform input values:
+
+```scala
+val textHandler: Handler[Any, Nothing, String, Response] =
+  Handler.fromFunction { (text: String) =>
+    Response.text(text)
+  }
+
+// Transform request to string before processing
+val requestHandler = textHandler.contramap[Request] { request =>
+  request.body.asString.getOrElse("")
+}
+```
+
+## Error Handling
+
+### Catching Errors
+
+Handle typed errors:
+
+```scala
+case class UserNotFound(id: String)
+
+val handler: Handler[Any, UserNotFound, Request, Response] = ???
+
+val handled = handler.catchAll { error =>
+  Handler.notFound(s"User ${error.id} not found")
+}
+
+// Catch specific errors
+val partial = handler.catchSome {
+  case UserNotFound(id) if id == "admin" =>
+    Handler.forbidden("Admin user access denied")
+}
+```
+
+### Error Mapping
+
+Transform error types:
+
+```scala
+val handler: Handler[Any, String, Request, Response] = ???
+
+// Map error to different type
+val mapped = handler.mapError { error =>
+  AppError(error)
+}
+
+// Map with effects
+val logged = handler.mapErrorZIO { error =>
+  ZIO.logError(error).as(AppError(error))
+}
+```
+
+### Fallback Handlers
+
+Provide alternative handlers on failure:
+
+```scala
+val primary: Handler[Any, Throwable, Request, Response] = ???
+val fallback: Handler[Any, Nothing, Request, Response] = ???
+
+// Use fallback if primary fails
+val resilient = primary <> fallback
+
+// Using orElse
+val resilient2 = primary.orElse(fallback)
+```
+
+### Sandbox
+
+Convert all failures (including defects) into responses:
+
+```scala
+val handler: Handler[Any, Throwable, Request, Response] = ???
+
+// All failures become HTTP responses
+val sandboxed: Handler[Any, Response, Request, Response] = 
+  handler.sandbox
+```
+
+## Timeouts
+
+```scala
+val handler: Handler[Any, Nothing, Request, Response] = ???
+
+// Return None if timeout
+val withTimeout = handler.timeout(30.seconds)
+
+// Return specific response if timeout
+val withTimeoutResponse = handler.timeoutFail(
+  Response.status(Status.RequestTimeout)
+)(30.seconds)
+```
+
+## Environment Management
+
+### Providing Environment
+
+Eliminate environmental requirements:
+
+```scala
+trait Database {
+  def getUser(id: String): UIO[User]
+}
+
+val handler: Handler[Database, Throwable, String, Response] =
+  Handler.fromFunctionZIO { id =>
+    ZIO.serviceWithZIO[Database](_.getUser(id))
+      .map(user => Response.json(user.toJson))
+  }
+
+val database: Database = ???
+
+val provided: Handler[Any, Throwable, String, Response] =
+  handler.provideEnvironment(ZEnvironment(database))
+```
+
+### Using Layers
+
+```scala
+val handler: Handler[Database, Throwable, Request, Response] = ???
+
+val dbLayer: ZLayer[Any, Throwable, Database] = ???
+
+val withLayer = handler.provideLayer(dbLayer)
+```
+
+## Parallel Composition
+
+### Racing Handlers
+
+```scala
+val handler1: Handler[Any, Nothing, Request, Response] = ???
+val handler2: Handler[Any, Nothing, Request, Response] = ???
+
+// First to complete wins
+val raced = handler1.race(handler2)
+```
+
+### Zipping Handlers
+
+Combine results from multiple handlers:
+
+```scala
+val nameHandler: Handler[Any, Nothing, Request, String] = ???
+val ageHandler: Handler[Any, Nothing, Request, Int] = ???
+
+// Combine outputs into tuple
+val combined = nameHandler <*> ageHandler
+
+// Use first result, execute second
+val leftBiased = nameHandler <* ageHandler
+
+// Execute first, use second result
+val rightBiased = nameHandler *> ageHandler
+```
+
+## Debugging
+
+### Tapping
+
+Inspect values without changing them:
+
+```scala
+val handler: Handler[Any, String, Request, Response] = ???
+
+val withLogging = handler
+  .tapZIO { response =>
+    ZIO.logInfo(s"Response status: ${response.status}")
+  }
+  .tapErrorZIO { error =>
+    ZIO.logError(s"Handler failed: $error")
+  }
+```
+
+## Converting to Routes
+
+Convert a handler into a route:
+
+```scala
+val handler: Handler[Any, Nothing, Request, Response] = 
+  Handler.text("Hello")
+
+val routes: Routes[Any, Nothing] = handler.toRoutes
+```
+
+## Specialized Handlers
+
+### WebSocket Handlers
+
+```scala
+val wsHandler: WebSocketApp[Any] = Handler.webSocket { channel =>
+  channel.receiveAll {
+    case ChannelEvent.Read(WebSocketFrame.Text(text)) =>
+      channel.send(ChannelEvent.Read(WebSocketFrame.text(s"Echo: $text")))
+    case _ => ZIO.unit
+  }
+}
+```
+
+### Stream Handlers
+
+Serve streaming responses:
+
+```scala
+import zio.stream._
+
+val stream: ZStream[Any, Throwable, Byte] = ???
+
+// With known content length
+val streamHandler = Handler.fromStream(stream, contentLength = 1024)
+
+// With chunked encoding
+val chunkedHandler = Handler.fromStreamChunked(stream)
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Handle Errors Explicitly" icon="shield-check">
+    Use `catchAll` and `mapError` for predictable error handling.
+  </Card>
+  <Card title="Use Effect Constructors" icon="bolt">
+    Prefer `fromZIO` and `fromFunctionZIO` for effectful operations.
+  </Card>
+  <Card title="Compose with Operators" icon="link">
+    Use `>>>`, `<*>`, and other operators for clean composition.
+  </Card>
+  <Card title="Type Safety First" icon="check-circle">
+    Leverage the type system to catch errors at compile time.
+  </Card>
+</CardGroup>
+
+## Related
+
+- [Request](/concepts/request) - HTTP request structure
+- [Response](/concepts/response) - HTTP response structure
+- [Middleware](/concepts/middleware) - Handler aspects and transformations

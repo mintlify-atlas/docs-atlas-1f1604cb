@@ -1,0 +1,181 @@
+---
+title: Introduction to ZIO HTTP
+description: A next-generation Scala framework for building scalable, correct, and efficient HTTP clients and servers
+---
+
+<div className="mx-auto max-w-4xl">
+  <div className="text-center mb-12">
+    <h1 className="text-5xl font-bold mb-4" style={{ color: '#040404' }}>
+      ZIO HTTP
+    </h1>
+    <p className="text-xl text-gray-600 mb-8">
+      A next-generation Scala framework for building scalable, correct, and efficient HTTP clients and servers
+    </p>
+    <div className="flex justify-center gap-4">
+      <a
+        href="/quickstart"
+        className="inline-block px-6 py-3 text-white rounded"
+        style={{ backgroundColor: '#d21204' }}
+      >
+        Get Started
+      </a>
+      <a
+        href="https://github.com/zio/zio-http"
+        className="inline-block px-6 py-3 border border-gray-300 rounded hover:bg-gray-50"
+        style={{ color: '#040404' }}
+      >
+        View on GitHub
+      </a>
+    </div>
+  </div>
+
+  <div className="mb-16">
+    <h2 className="text-3xl font-bold mb-6" style={{ color: '#040404' }}>
+      Key Features
+    </h2>
+    <div className="grid md:grid-cols-2 gap-6">
+      <div className="p-6 rounded-lg" style={{ backgroundColor: '#f7f8fa' }}>
+        <h3 className="text-xl font-semibold mb-2" style={{ color: '#040404' }}>
+          Type-Safe & Composable
+        </h3>
+        <p className="text-gray-600">
+          Built on ZIO, inheriting type safety, composability, and testability for reliable HTTP applications
+        </p>
+      </div>
+      <div className="p-6 rounded-lg" style={{ backgroundColor: '#f7f8fa' }}>
+        <h3 className="text-xl font-semibold mb-2" style={{ color: '#040404' }}>
+          Declarative Endpoints
+        </h3>
+        <p className="text-gray-600">
+          Define endpoints imperatively or declaratively with compile-time type checking and OpenAPI generation
+        </p>
+      </div>
+      <div className="p-6 rounded-lg" style={{ backgroundColor: '#f7f8fa' }}>
+        <h3 className="text-xl font-semibold mb-2" style={{ color: '#040404' }}>
+          High Performance
+        </h3>
+        <p className="text-gray-600">
+          Powered by Netty with built-in support for streaming, WebSockets, and efficient resource management
+        </p>
+      </div>
+      <div className="p-6 rounded-lg" style={{ backgroundColor: '#f7f8fa' }}>
+        <h3 className="text-xl font-semibold mb-2" style={{ color: '#040404' }}>
+          Cloud-Native Ready
+        </h3>
+        <p className="text-gray-600">
+          Built-in concurrency, structured logging, configuration management, and metrics instrumentation
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div className="mb-16">
+    <h2 className="text-3xl font-bold mb-6" style={{ color: '#040404' }}>
+      Quick Example
+    </h2>
+    <p className="text-gray-600 mb-4">
+      Here's a simple HTTP server that responds to GET requests:
+    </p>
+
+```scala
+import zio._
+import zio.http._
+
+object GreetingServer extends ZIOAppDefault {
+  val routes =
+    Routes(
+      Method.GET / Root -> handler(Response.text("Greetings at your service")),
+      Method.GET / "greet" -> handler { (req: Request) =>
+        val name = req.queryOrElse[String]("name", "World")
+        Response.text(s"Hello $name!")
+      }
+    )
+
+  def run = Server.serve(routes).provide(Server.default)
+}
+```
+
+  </div>
+
+  <div className="mb-16">
+    <h2 className="text-3xl font-bold mb-6" style={{ color: '#040404' }}>
+      Core Concepts
+    </h2>
+    <p className="text-gray-600 mb-6">
+      ZIO HTTP is designed around <strong>HTTP as a function</strong>, where both server and client are functions from Request to Response.
+    </p>
+  </div>
+</div>
+
+<CardGroup cols={3}>
+  <Card title="Routes" icon="route" href="/concepts/routes">
+    Learn about defining and composing HTTP routes
+  </Card>
+  <Card title="Handlers" icon="function" href="/concepts/handlers">
+    Transform requests into responses with handlers
+  </Card>
+  <Card title="Server" icon="server" href="/server/overview">
+    Configure and run your HTTP server
+  </Card>
+  <Card title="Client" icon="plug" href="/client/overview">
+    Make HTTP requests with the type-safe client
+  </Card>
+  <Card title="Endpoints" icon="diagram-project" href="/advanced/endpoints">
+    Define declarative, type-safe API endpoints
+  </Card>
+  <Card title="WebSockets" icon="bolt" href="/server/websockets">
+    Build real-time applications with WebSocket support
+  </Card>
+</CardGroup>
+
+## Why ZIO HTTP?
+
+ZIO HTTP offers several advantages for building HTTP applications:
+
+<Accordion title="Type Safety">
+  ZIO HTTP leverages Scala's type system to ensure correctness at compile time. Route patterns, request parameters, and response types are all type-checked, catching errors before runtime.
+</Accordion>
+
+<Accordion title="Composability">
+  Built on ZIO, ZIO HTTP inherits powerful composition patterns. Routes, handlers, and middleware can be easily combined and reused across your application.
+</Accordion>
+
+<Accordion title="Performance">
+  Powered by Netty, ZIO HTTP delivers high throughput and low latency. Built-in support for streaming and backpressure ensures efficient resource utilization.
+</Accordion>
+
+<Accordion title="Developer Experience">
+  From declarative endpoint definitions to automatic OpenAPI generation, ZIO HTTP provides excellent tooling and IDE support for productive development.
+</Accordion>
+
+## What's Included
+
+ZIO HTTP provides everything you need to build production-ready HTTP applications:
+
+- **Server & Client**: Full-featured HTTP server and client implementations
+- **Routing**: Flexible routing DSL with path parameter extraction
+- **Middleware**: Cross-cutting concerns like logging, authentication, and CORS
+- **WebSockets**: First-class WebSocket support for real-time communication
+- **Streaming**: Request and response body streaming with ZIO Streams
+- **SSL/TLS**: Comprehensive SSL/TLS configuration and certificate management
+- **OpenAPI**: Automatic OpenAPI documentation generation
+- **Testing**: TestKit for testing HTTP applications without a live server
+- **Templates**: Built-in DSL for server-side HTML rendering
+- **Codecs**: Integration with ZIO Schema for JSON, Protobuf, Avro, and Thrift
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Add ZIO HTTP to your project
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first HTTP application
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/hello-world">
+    Explore code examples
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/routes">
+    Browse the API documentation
+  </Card>
+</CardGroup>

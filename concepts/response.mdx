@@ -1,0 +1,483 @@
+---
+title: Response
+description: Create and manipulate HTTP responses in ZIO HTTP
+---
+
+The `Response` type represents an HTTP response with status, headers, and body. It provides a rich API for constructing and transforming responses.
+
+## Overview
+
+```scala
+final case class Response(
+  status: Status = Status.Ok,
+  headers: Headers = Headers.empty,
+  body: Body = Body.empty,
+)
+```
+
+## Creating Responses
+
+### Status Code Responses
+
+Create responses with specific status codes:
+
+```scala
+import zio.http._
+
+// 200 OK
+val ok = Response.ok
+
+// 201 Created
+val created = Response.status(Status.Created)
+
+// 204 No Content  
+val noContent = Response.status(Status.NoContent)
+
+// 400 Bad Request
+val badRequest = Response.badRequest
+val badRequestMsg = Response.badRequest("Invalid input")
+
+// 401 Unauthorized
+val unauthorized = Response.unauthorized
+val unauthorizedMsg = Response.unauthorized("Invalid credentials")
+
+// 403 Forbidden
+val forbidden = Response.forbidden
+val forbiddenMsg = Response.forbidden("Access denied")
+
+// 404 Not Found
+val notFound = Response.notFound
+val notFoundMsg = Response.notFound("Resource not found")
+
+// 500 Internal Server Error
+val serverError = Response.internalServerError
+val serverErrorMsg = Response.internalServerError("Database error")
+```
+
+### Content Type Responses
+
+Create responses with specific content types:
+
+```scala
+// Plain text
+val textResponse = Response.text("Hello, World!")
+
+// JSON
+val jsonResponse = Response.json("""{
+  "message": "Success",
+  "data": [1, 2, 3]
+}""")
+
+// HTML
+import zio.http.template._
+
+val htmlResponse = Response.html(
+  html(
+    body(
+      h1("Welcome"),
+      p("This is a response")
+    )
+  )
+)
+```
+
+### Error Responses
+
+Create error responses:
+
+```scala
+// Generic error
+val error = Response.error(Status.BadRequest)
+val errorMsg = Response.error(Status.BadRequest, "Validation failed")
+
+// With body
+val errorWithBody = Response.error(
+  Status.UnprocessableEntity,
+  Body.fromString("Invalid JSON")
+)
+```
+
+### Redirect Responses
+
+```scala
+val url = URL.root / "dashboard"
+
+// Temporary redirect (307)
+val tempRedirect = Response.redirect(url)
+
+// Permanent redirect (308)
+val permRedirect = Response.redirect(url, isPermanent = true)
+
+// See Other (303) - Always uses GET
+val seeOther = Response.seeOther(url)
+```
+
+<Note>
+Use `seeOther` for POST/redirect/GET pattern. Use `redirect` to preserve the request method.
+</Note>
+
+## Modifying Responses
+
+### Setting Status
+
+```scala
+val response: Response = ???
+
+val updated = response.status(Status.Created)
+```
+
+### Adding Headers
+
+```scala
+val response: Response = ???
+
+// Add single header
+val withContentType = response.addHeader(
+  Header.ContentType(MediaType.application.json)
+)
+
+// Add multiple headers
+val withHeaders = response.addHeaders(
+  Headers(
+    Header.ContentType(MediaType.application.json),
+    Header.CacheControl.NoCache
+  )
+)
+
+// Fluent helper
+val withCustom = response.addHeader[String](
+  "X-Request-ID", "abc-123"
+)
+```
+
+### Setting Content Type
+
+Convenient method for content type:
+
+```scala
+val response: Response = ???
+
+val withContentType = response.contentType(
+  MediaType.application.json
+)
+```
+
+### Updating Headers
+
+```scala
+val response: Response = ???
+
+val updated = response.updateHeaders { headers =>
+  headers
+    .addHeader(Header.Server("ZIO-HTTP"))
+    .removeHeader(Header.Server.name)
+}
+```
+
+## Working with Cookies
+
+### Adding Cookies
+
+```scala
+val response: Response = ???
+
+val sessionCookie = Cookie.Response(
+  name = "session_id",
+  content = "abc123",
+  maxAge = Some(3600.seconds),
+  path = Some(Path.root),
+  isSecure = true,
+  isHttpOnly = true
+)
+
+val withCookie = response.addCookie(sessionCookie)
+
+// Add multiple cookies
+val withCookies = response.addCookies(
+  sessionCookie,
+  Cookie.Response("theme", "dark")
+)
+```
+
+### Flash Scope
+
+Add flash-scoped data:
+
+```scala
+import zio.http.Flash
+
+val response: Response = ???
+
+val withFlash = response.addFlash(
+  Flash.set("message", "User created successfully")
+)
+```
+
+## Body Operations
+
+### Collecting the Body
+
+Materialize a streaming body:
+
+```scala
+val response: Response = ???
+
+// Collect body into memory
+val collected: ZIO[Any, Nothing, Response] = 
+  response.collect
+```
+
+### Ignoring the Body
+
+```scala
+val response: Response = ???
+
+// Consume and discard body
+val ignored: ZIO[Any, Nothing, Response] = 
+  response.ignoreBody
+```
+
+### Decoding Body
+
+```scala
+import zio.schema.codec._
+
+case class User(name: String, email: String)
+implicit val schema: Schema[User] = DeriveSchema.gen[User]
+
+val response: Response = ???
+
+val user: Task[User] = response.bodyAs[User]
+```
+
+## Applying Patches
+
+Apply incremental modifications:
+
+```scala
+val response: Response = ???
+
+val patch = Response.Patch.empty
+  .addHeader(Header.Custom("X-Version", "1.0"))
+  .status(Status.Created)
+
+val patched = response.patch(patch)
+```
+
+### Creating Patches
+
+```scala
+import zio.http.Response.Patch
+
+// Empty patch
+val patch = Patch.empty
+
+// Add headers
+val withHeaders = Patch.addHeader(
+  Header.ContentType(MediaType.application.json)
+)
+
+// Remove headers
+val withoutHeaders = Patch.removeHeaders(
+  Set(Header.ContentType, Header.ContentLength)
+)
+
+// Set status
+val withStatus = Patch.status(Status.Created)
+
+// Update headers with function
+val updated = Patch.updateHeaders { headers =>
+  headers.addHeader(Header.Custom("X-Custom", "value"))
+}
+
+// Combine patches
+val combined = withHeaders ++ withStatus
+```
+
+## Creating from Errors
+
+### From Throwable
+
+Create response from exception:
+
+```scala
+val throwable: Throwable = new IllegalArgumentException("Invalid ID")
+
+val response = Response.fromThrowable(throwable)
+// Status based on exception type
+// Body contains error message (if configured)
+```
+
+### From Cause
+
+Create response from ZIO cause:
+
+```scala
+import zio._
+
+val cause: Cause[String] = Cause.fail("Something went wrong")
+
+val response = Response.fromCause(cause)
+```
+
+### Error Response Configuration
+
+```scala
+import zio.http.ErrorResponseConfig
+
+val config = ErrorResponseConfig(
+  withErrorBody = true,
+  withStackTrace = true,
+  maxStackTraceDepth = 10,
+  errorFormat = ErrorResponseConfig.ErrorFormat.Json
+)
+
+val response = Response.fromThrowable(throwable, config)
+```
+
+## Server-Sent Events
+
+Create SSE responses:
+
+```scala
+import zio.stream._
+import zio.schema._
+
+case class Update(id: Int, message: String)
+implicit val schema: Schema[Update] = DeriveSchema.gen[Update]
+
+// From stream
+val events: ZStream[Any, Nothing, ServerSentEvent[Update]] = ???
+val sseResponse = Response.fromServerSentEvents(events)
+
+// From iterable
+val eventList: List[ServerSentEvent[Update]] = ???
+val sseResponse2 = Response.fromServerSentEvents(eventList)
+
+// Single event
+val event = ServerSentEvent(Update(1, "Hello"))
+val sseResponse3 = Response.fromServerSentEvent(event)
+```
+
+## WebSocket Responses
+
+Create WebSocket upgrade response:
+
+```scala
+val wsApp: WebSocketApp[Any] = ???
+
+val wsResponse: ZIO[Any, Nothing, Response] = 
+  Response.fromSocketApp(wsApp)
+```
+
+## Converting to Handler
+
+Create a handler from a response:
+
+```scala
+val response = Response.text("Static content")
+
+val handler: Handler[Any, Nothing, Any, Response] = 
+  response.toHandler
+```
+
+## Response Headers
+
+### Accessing Headers
+
+```scala
+val response: Response = ???
+
+// Get all headers
+val headers: Headers = response.headers
+
+// Get specific header
+val contentType: Option[Header.ContentType] = 
+  response.header(Header.ContentType)
+
+// Get raw header
+val custom: Option[String] = 
+  response.rawHeader("X-Custom-Header")
+```
+
+### Common Headers
+
+```scala
+val response = Response.text("Hello")
+  .addHeader(Header.CacheControl.NoCache)
+  .addHeader(Header.Server("ZIO-HTTP/3.0"))
+  .addHeader(Header.Custom("X-Request-ID", "123"))
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Constructors" icon="wrench">
+    Prefer semantic constructors like `Response.json()` over manual construction.
+  </Card>
+  <Card title="Set Content Type" icon="tag">
+    Always set appropriate content type for the response body.
+  </Card>
+  <Card title="Handle Streaming" icon="water">
+    Use streaming responses for large payloads to avoid memory issues.
+  </Card>
+  <Card title="Secure Cookies" icon="shield-check">
+    Set `isSecure` and `isHttpOnly` flags on cookies for security.
+  </Card>
+</CardGroup>
+
+## Examples
+
+<Accordion title="JSON API Response">
+```scala
+case class ApiResponse[T](data: T, status: String)
+
+def successResponse[T](data: T): Response = {
+  Response.json(s"""{
+    "status": "success",
+    "data": ${data.toJson}
+  }""")
+    .status(Status.Ok)
+    .addHeader(Header.Custom("X-Response-Time", "100ms"))
+}
+```
+</Accordion>
+
+<Accordion title="File Download Response">
+```scala
+import java.io.File
+
+def fileDownload(file: File): Response = {
+  Response(
+    status = Status.Ok,
+    headers = Headers(
+      Header.ContentType(MediaType.application.`octet-stream`),
+      Header.ContentDisposition.Attachment(file.getName)
+    ),
+    body = Body.fromFile(file)
+  )
+}
+```
+</Accordion>
+
+<Accordion title="Error Response with Details">
+```scala
+case class ErrorDetails(
+  code: String,
+  message: String,
+  fields: Map[String, String]
+)
+
+def validationError(details: ErrorDetails): Response = {
+  Response.json(details.toJson)
+    .status(Status.UnprocessableEntity)
+    .addHeader(Header.Custom("X-Error-Code", details.code))
+}
+```
+</Accordion>
+
+## Related
+
+- [Request](/concepts/request) - HTTP request structure
+- [Handler](/concepts/handlers) - Creating responses from requests
+- [Body](https://zio.dev/zio-http/reference/body) - Working with response bodies

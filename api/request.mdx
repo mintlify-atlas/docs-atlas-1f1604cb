@@ -1,0 +1,484 @@
+---
+title: Request
+description: API reference for zio.http.Request
+---
+
+`Request` represents an HTTP request with method, URL, headers, and body.
+
+## Type Signature
+
+```scala
+final case class Request(
+  version: Version = Version.Default,
+  method: Method = Method.ANY,
+  url: URL = URL.empty,
+  headers: Headers = Headers.empty,
+  body: Body = Body.empty,
+  remoteAddress: Option[InetAddress] = None,
+  remoteCertificate: Option[Certificate] = None,
+)
+```
+
+<ParamField path="version" type="Version" default="Version.Default">
+  The HTTP protocol version
+</ParamField>
+
+<ParamField path="method" type="Method" default="Method.ANY">
+  The HTTP method (GET, POST, etc.)
+</ParamField>
+
+<ParamField path="url" type="URL" default="URL.empty">
+  The request URL containing path and query parameters
+</ParamField>
+
+<ParamField path="headers" type="Headers" default="Headers.empty">
+  HTTP headers
+</ParamField>
+
+<ParamField path="body" type="Body" default="Body.empty">
+  The request body
+</ParamField>
+
+<ParamField path="remoteAddress" type="Option[InetAddress]" default="None">
+  The client's IP address
+</ParamField>
+
+<ParamField path="remoteCertificate" type="Option[Certificate]" default="None">
+  Client certificate for mutual TLS
+</ParamField>
+
+## Creating Requests
+
+### Request.get
+
+```scala
+def get(path: String): Request
+def get(url: URL): Request
+```
+
+Creates a GET request.
+
+<ParamField path="path" type="String">
+  URL path or complete URL string
+</ParamField>
+
+**Example:**
+
+```scala
+val req = Request.get("/api/users")
+val req2 = Request.get("https://api.example.com/users")
+```
+
+### Request.post
+
+```scala
+def post(path: String, body: Body): Request
+def post(url: URL, body: Body): Request
+```
+
+Creates a POST request with a body.
+
+<ParamField path="path" type="String">
+  URL path
+</ParamField>
+
+<ParamField path="body" type="Body">
+  Request body
+</ParamField>
+
+### Request.put
+
+```scala
+def put(path: String, body: Body): Request
+def put(url: URL, body: Body): Request
+```
+
+Creates a PUT request with a body.
+
+### Request.patch
+
+```scala
+def patch(path: String, body: Body): Request
+def patch(url: URL, body: Body): Request
+```
+
+Creates a PATCH request with a body.
+
+### Request.delete
+
+```scala
+def delete(path: String): Request
+def delete(url: URL): Request
+```
+
+Creates a DELETE request.
+
+### Request.head
+
+```scala
+def head(path: String): Request
+def head(url: URL): Request
+```
+
+Creates a HEAD request.
+
+### Request.options
+
+```scala
+def options(path: String): Request
+def options(url: URL): Request
+```
+
+Creates an OPTIONS request.
+
+## Accessing Request Properties
+
+### path
+
+```scala
+def path: Path
+```
+
+<ResponseField name="return" type="Path">
+  The URL path of the request
+</ResponseField>
+
+### queryParameters
+
+```scala
+def queryParameters: QueryParams
+```
+
+<ResponseField name="return" type="QueryParams">
+  The query parameters from the URL
+</ResponseField>
+
+### allHeaders
+
+```scala
+val allHeaders: Headers
+```
+
+<ResponseField name="return" type="Headers">
+  All headers including those required by the body (e.g., Content-Type)
+</ResponseField>
+
+## Modifying Requests
+
+### Combining Requests
+
+```scala
+def ++(that: Request): Request
+```
+
+Combines two requests. Information from `that` takes precedence in conflicts.
+
+<ParamField path="that" type="Request">
+  The request to merge with
+</ParamField>
+
+**Example:**
+
+```scala
+val baseReq = Request.get("/api")
+val withAuth = Request(headers = Headers("Authorization", "Bearer token"))
+val combined = baseReq ++ withAuth
+```
+
+### Path Manipulation
+
+#### path
+
+```scala
+def path(path: Path): Request
+```
+
+Sets the request path.
+
+#### addLeadingSlash
+
+```scala
+def addLeadingSlash: Request
+```
+
+Adds a leading slash to the path if not present.
+
+#### addTrailingSlash
+
+```scala
+def addTrailingSlash: Request
+```
+
+Adds a trailing slash to the path.
+
+#### dropLeadingSlash
+
+```scala
+def dropLeadingSlash: Request
+```
+
+Removes the leading slash from the path.
+
+#### dropTrailingSlash
+
+```scala
+def dropTrailingSlash: Request
+```
+
+Removes the trailing slash from the path.
+
+#### unnest
+
+```scala
+def unnest(prefix: Path): Request
+```
+
+Removes a path prefix if present.
+
+<ParamField path="prefix" type="Path">
+  The prefix to remove
+</ParamField>
+
+#### updatePath
+
+```scala
+def updatePath(f: Path => Path): Request
+```
+
+Transforms the path using a function.
+
+### URL Manipulation
+
+#### updateURL
+
+```scala
+def updateURL(f: URL => URL): Request
+```
+
+Transforms the URL using a function.
+
+<ParamField path="f" type="URL => URL">
+  Function to transform the URL
+</ParamField>
+
+### Query Parameters
+
+#### updateQueryParams
+
+```scala
+def updateQueryParams(f: QueryParams => QueryParams): Request
+```
+
+Transforms the query parameters.
+
+### Headers
+
+#### updateHeaders
+
+```scala
+def updateHeaders(update: Headers => Headers)(implicit trace: Trace): Request
+```
+
+Transforms the headers using a function.
+
+<ParamField path="update" type="Headers => Headers">
+  Function to transform headers
+</ParamField>
+
+**Example:**
+
+```scala
+request.updateHeaders(_.addHeader("X-Custom", "value"))
+```
+
+### Body Manipulation
+
+#### withBody
+
+```scala
+def withBody(body: Body): Request
+```
+
+Replaces the request body.
+
+<ParamField path="body" type="Body">
+  The new body
+</ParamField>
+
+#### updateBody
+
+```scala
+def updateBody(f: Body => Body): Request
+```
+
+Transforms the body using a function.
+
+#### updateBodyZIO
+
+```scala
+def updateBodyZIO[R, E](f: Body => ZIO[R, E, Body]): ZIO[R, E, Request]
+```
+
+Effectfully transforms the body.
+
+<ParamField path="f" type="Body => ZIO[R, E, Body]">
+  Effectful transformation function
+</ParamField>
+
+### Patching
+
+#### patch
+
+```scala
+def patch(p: Request.Patch): Request
+```
+
+Applies a patch to the request.
+
+<ParamField path="p" type="Request.Patch">
+  Patch containing headers and query params to add
+</ParamField>
+
+## Cookies
+
+### cookie
+
+```scala
+def cookie(name: String): Option[Cookie]
+```
+
+Returns the cookie with the given name.
+
+<ParamField path="name" type="String">
+  The cookie name
+</ParamField>
+
+<ResponseField name="return" type="Option[Cookie]">
+  The cookie if present
+</ResponseField>
+
+### cookies
+
+```scala
+def cookies: Chunk[Cookie]
+```
+
+<ResponseField name="return" type="Chunk[Cookie]">
+  All cookies from the request
+</ResponseField>
+
+### addCookie
+
+```scala
+def addCookie(cookie: Cookie.Request): Request
+```
+
+Adds a cookie to the request.
+
+### addCookies
+
+```scala
+def addCookies(cookie: Cookie.Request, cookies: Cookie.Request*): Request
+```
+
+Adds multiple cookies to the request.
+
+### cookieWithZIO
+
+```scala
+def cookieWithZIO[R, A](name: String)(f: Cookie => ZIO[R, Throwable, A])(implicit trace: Trace): ZIO[R, Throwable, A]
+```
+
+Accesses a cookie and runs an effect with it.
+
+<ParamField path="name" type="String">
+  Cookie name
+</ParamField>
+
+<ParamField path="f" type="Cookie => ZIO[R, Throwable, A]">
+  Effect to run with the cookie
+</ParamField>
+
+**Example:**
+
+```scala
+request.cookieWithZIO("session") { cookie =>
+  validateSession(cookie.value)
+}
+```
+
+### cookieWithOrFail
+
+```scala
+def cookieWithOrFail[R, E, A](name: String)(missingCookieError: E)(f: Cookie => ZIO[R, E, A])(implicit trace: Trace): ZIO[R, E, A]
+```
+
+Accesses a cookie with a custom error if missing.
+
+## Flash Scope
+
+### flash
+
+```scala
+def flash[A](flash: Flash[A]): Option[A]
+```
+
+Retrieves a value from cookie-based flash scope.
+
+<ParamField path="flash" type="Flash[A]">
+  The flash scope accessor
+</ParamField>
+
+<ResponseField name="return" type="Option[A]">
+  The flash value if present
+</ResponseField>
+
+## Body Operations
+
+### collect
+
+```scala
+def collect(implicit trace: Trace): ZIO[Any, Nothing, Request]
+```
+
+Collects the potentially streaming body into a single chunk.
+
+<ResponseField name="return" type="ZIO[Any, Nothing, Request]">
+  Effect producing request with materialized body
+</ResponseField>
+
+### ignoreBody
+
+```scala
+def ignoreBody(implicit trace: Trace): ZIO[Any, Nothing, Request]
+```
+
+Consumes and discards the streaming body.
+
+<ResponseField name="return" type="ZIO[Any, Nothing, Request]">
+  Effect producing request with empty body
+</ResponseField>
+
+## Request.Patch
+
+```scala
+final case class Patch(addHeaders: Headers, addQueryParams: QueryParams)
+```
+
+Represents a patch that can be applied to a request.
+
+### Patch.empty
+
+```scala
+val empty: Patch
+```
+
+An empty patch.
+
+### Combining Patches
+
+```scala
+def ++(that: Patch): Patch
+```
+
+Combines two patches.

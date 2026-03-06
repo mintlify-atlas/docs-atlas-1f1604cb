@@ -1,0 +1,169 @@
+---
+title: Middleware API
+description: API reference for HTTP middleware
+---
+
+Middleware in ZIO HTTP represents cross-cutting concerns that can be applied to routes.
+
+## Type Signature
+
+```scala
+type Middleware[Env] = Routes[Env, Response] => Routes[Env, Response]
+```
+
+A middleware is a function that transforms routes.
+
+## Built-in Middleware
+
+### cors
+
+```scala
+def cors(config: CorsConfig = CorsConfig()): Middleware[Any]
+```
+
+Adds CORS headers to responses.
+
+<ParamField path="config" type="CorsConfig">
+  CORS configuration (defaults to permissive)
+</ParamField>
+
+**Example:**
+```scala
+import zio.http._
+import zio.http.Middleware._
+
+val routes = Routes(
+  Method.GET / "api" / "users" -> handler(Response.json("[]"))
+) @@ cors()
+```
+
+### timeout
+
+```scala
+def timeout(duration: Duration): Middleware[Any]
+```
+
+Fails requests that exceed the timeout.
+
+<ParamField path="duration" type="Duration" required>
+  Maximum request duration
+</ParamField>
+
+**Example:**
+```scala
+import scala.concurrent.duration._
+
+val routes = Routes(
+  Method.GET / "slow" -> handler {
+    ZIO.sleep(5.seconds) *> Response.ok
+  }
+) @@ timeout(3.seconds)
+```
+
+### serveDirectory
+
+```scala
+def serveDirectory(docRoot: File, options: ServeOptions = ServeOptions.default): Middleware[Any]
+```
+
+Serves static files from a directory.
+
+<ParamField path="docRoot" type="File" required>
+  Root directory for static files
+</ParamField>
+
+<ParamField path="options" type="ServeOptions">
+  File serving options
+</ParamField>
+
+### requestLogging
+
+```scala
+def requestLogging(logLevel: LogLevel = LogLevel.Info): Middleware[Any]
+```
+
+Logs incoming requests.
+
+### responseLogging
+
+```scala
+def responseLogging(logLevel: LogLevel = LogLevel.Info): Middleware[Any]
+```
+
+Logs outgoing responses.
+
+### metrics
+
+```scala
+def metrics(prefix: String = "http"): Middleware[Any]
+```
+
+Collects request/response metrics.
+
+## Creating Custom Middleware
+
+```scala
+def customMiddleware: Middleware[Any] = { routes =>
+  routes.transform[Any] { handler =>
+    handler.contramapZIO[Any, Request] { request =>
+      // Pre-process request
+      Console.printLine(s"Incoming: ${request.method} ${request.url}") *>
+        ZIO.succeed(request)
+    }.mapZIO { response =>
+      // Post-process response
+      Console.printLine(s"Outgoing: ${response.status}") *>
+        ZIO.succeed(response)
+    }
+  }
+}
+```
+
+## Combining Middleware
+
+Middleware can be composed using `@@`:
+
+```scala
+val routes = Routes(
+  Method.GET / "api" / "users" -> handler(Response.json("[]"))
+) @@ cors() @@ timeout(5.seconds) @@ requestLogging()
+```
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+import scala.concurrent.duration._
+
+object MiddlewareExample extends ZIOAppDefault {
+  val routes = Routes(
+    Method.GET / "api" / "users" -> handler {
+      Response.json("""[{"id":1,"name":"Alice"}]""")
+    },
+    Method.GET / "api" / "slow" -> handler {
+      ZIO.sleep(2.seconds) *> Response.ok
+    }
+  ) @@ Middleware.cors() 
+    @@ Middleware.timeout(3.seconds) 
+    @@ Middleware.requestLogging()
+  
+  def run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Middleware Concepts" href="/concepts/middleware">
+    Middleware concepts and patterns
+  </Card>
+  <Card title="CORS Guide" href="/guides/cors">
+    CORS configuration guide
+  </Card>
+  <Card title="Handler Aspect" href="/api/handler-aspect">
+    Handler aspect API
+  </Card>
+  <Card title="Routes" href="/api/routes">
+    Routes API reference
+  </Card>
+</CardGroup>

@@ -1,0 +1,88 @@
+---
+title: Declarative Endpoints
+description: Define type-safe, declarative API endpoints with automatic OpenAPI generation
+---
+
+ZIO HTTP provides a powerful declarative endpoint API that allows you to define HTTP endpoints with compile-time type safety and automatic OpenAPI documentation generation.
+
+## Overview
+
+Declarative endpoints separate the endpoint description from its implementation, providing several benefits:
+
+- **Type Safety**: Input and output types are checked at compile time
+- **OpenAPI Generation**: Automatic OpenAPI/Swagger documentation
+- **Code Generation**: Generate client code from endpoint definitions
+- **Documentation**: Inline documentation with the `??` operator
+- **Validation**: Built-in validation with meaningful error messages
+
+## Creating Endpoints
+
+Define an endpoint using the `Endpoint` constructor:
+
+```scala
+import zio.http._
+import zio.http.endpoint._
+import zio.http.codec._
+
+val getUserEndpoint = 
+  Endpoint(Method.GET / "users" / int("id"))
+    .in[Unit]
+    .out[User]
+```
+
+## Input Specification
+
+Specify endpoint inputs using `.in`, `.query`, and `.header`:
+
+```scala
+val createUserEndpoint = 
+  Endpoint(Method.POST / "users")
+    .in[CreateUserRequest]
+    .header(HeaderCodec.authorization)
+    .out[User]
+```
+
+## Query Parameters
+
+```scala
+val searchEndpoint = 
+  Endpoint(Method.GET / "search")
+    .in[Unit]
+    .query(QueryCodec.queryStr("q"))
+    .query(QueryCodec.queryInt("limit").optional)
+    .out[SearchResults]
+```
+
+## Implementation
+
+Implement an endpoint with a handler:
+
+```scala
+val getUserRoute = 
+  getUserEndpoint.implement {
+    handler { (userId: Int) =>
+      UserService.getById(userId)
+    }
+  }
+```
+
+<Note>
+For complete API reference, see the [Endpoint API](/api/endpoint) page.
+</Note>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Endpoint API" href="/api/endpoint">
+    Complete API reference for endpoints
+  </Card>
+  <Card title="HTTP Codec" href="/advanced/codec">
+    Learn about HTTP codecs
+  </Card>
+  <Card title="OpenAPI" href="/advanced/openapi">
+    Generate OpenAPI documentation
+  </Card>
+  <Card title="REST API Example" href="/examples/rest-api">
+    See endpoints in action
+  </Card>
+</CardGroup>

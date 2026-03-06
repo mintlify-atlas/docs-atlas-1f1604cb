@@ -1,0 +1,186 @@
+---
+title: Testing HTTP Applications
+description: Test ZIO HTTP applications without running a live server
+---
+
+ZIO HTTP provides a comprehensive testing toolkit that allows you to test HTTP applications without starting a live server.
+
+## Overview
+
+The testing toolkit provides:
+
+- **TestClient**: Make requests without a network connection
+- **TestServer**: Run a server in-memory for testing
+- **No Network**: Fast tests without network overhead
+- **ZIO Test Integration**: Works seamlessly with ZIO Test
+
+## Setup
+
+Add the testkit dependency:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http-testkit" % "3.3.2" % Test
+```
+
+## Testing Routes
+
+Test routes directly without a server:
+
+```scala
+import zio._
+import zio.http._
+import zio.test._
+
+object RoutesSpec extends ZIOSpecDefault {
+  val routes = Routes(
+    Method.GET / "hello" -> handler(Response.text("Hello, World!"))
+  )
+
+  def spec = suite("Routes")(    
+    test("responds to GET /hello") {
+      val request = Request.get("/hello")
+      for {
+        response <- routes.runZIO(request)
+        body     <- response.body.asString
+      } yield assertTrue(
+        response.status == Status.Ok,
+        body == "Hello, World!"
+      )
+    }
+  )
+}
+```
+
+## Using TestClient
+
+Test with the TestClient:
+
+```scala
+import zio.http.testkit._
+
+object ClientSpec extends ZIOSpecDefault {
+  val routes = Routes(
+    Method.GET / "users" / int("id") -> handler { (id: Int, _: Request) =>
+      Response.json(s"""{ "id": $id, "name": "User $id" }""")
+    }
+  )
+
+  def spec = suite("Client")(    
+    test("fetches user by ID") {
+      val app = for {
+        client   <- ZIO.service[Client]
+        response <- client(Request.get("/users/123"))
+        body     <- response.body.asString
+      } yield assertTrue(
+        response.status == Status.Ok,
+        body.contains("\"id\": 123")
+      )
+      
+      app.provide(
+        TestClient.layer(routes)
+      )
+    }
+  )
+}
+```
+
+## Testing with Dependencies
+
+Test routes that require ZIO services:
+
+```scala
+trait UserService {
+  def getUser(id: Int): Task[User]
+}
+
+val routes: Routes[UserService, Response] = Routes(
+  Method.GET / "users" / int("id") -> handler { (id: Int, _: Request) =>
+    ZIO.serviceWithZIO[UserService](_.getUser(id)).map { user =>
+      Response.json(s"""{ "id": ${user.id}, "name": "${user.name}" }""")
+    }
+  }
+)
+
+test("fetches user from service") {
+  val mockService = new UserService {
+    def getUser(id: Int) = ZIO.succeed(User(id, s"User $id"))
+  }
+  
+  val request = Request.get("/users/123")
+  val app = routes.runZIO(request)
+  
+  app.provide(ZLayer.succeed(mockService))
+    .map { response =>
+      assertTrue(response.status == Status.Ok)
+    }
+}
+```
+
+## Testing Streaming
+
+Test streaming responses:
+
+```scala
+import zio.stream._
+
+test("streams data") {
+  val routes = Routes(
+    Method.GET / "stream" -> handler {
+      val stream = ZStream.fromIterable(List("a", "b", "c"))
+      Response.fromStream(stream)
+    }
+  )
+  
+  for {
+    response <- routes.runZIO(Request.get("/stream"))
+    chunks   <- response.body.asStream.runCollect
+  } yield assertTrue(
+    chunks.mkString == "abc"
+  )
+}
+```
+
+## Testing Error Handling
+
+Test error scenarios:
+
+```scala
+test("handles errors") {
+  val routes = Routes(
+    Method.GET / "error" -> handler {
+      ZIO.fail(new RuntimeException("Something went wrong"))
+    }
+  ).handleError { error =>
+    Response.internalServerError(error.getMessage)
+  }
+  
+  for {
+    response <- routes.runZIO(Request.get("/error"))
+    body     <- response.body.asString
+  } yield assertTrue(
+    response.status == Status.InternalServerError,
+    body.contains("Something went wrong")
+  )
+}
+```
+
+<Note>
+The TestClient and TestServer run entirely in-memory without network access, making tests fast and reliable.
+</Note>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" href="/quickstart">
+    Testing section in quickstart
+  </Card>
+  <Card title="Routes" href="/concepts/routes">
+    Learn about routes
+  </Card>
+  <Card title="Handlers" href="/concepts/handlers">
+    Learn about handlers
+  </Card>
+  <Card title="Error Handling" href="/guides/error-handling">
+    Error handling patterns
+  </Card>
+</CardGroup>

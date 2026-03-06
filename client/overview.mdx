@@ -1,0 +1,203 @@
+---
+title: Client Overview
+description: Overview of the ZIO HTTP client for making HTTP requests
+---
+
+ZIO HTTP provides a powerful, purely functional HTTP client built on top of ZIO. The client supports both batched (fully materialized) and streaming requests, WebSocket connections, SSL/TLS, connection pooling, and comprehensive configuration options.
+
+## Getting Started
+
+The simplest way to use the client is through the `Client` service:
+
+```scala
+import zio._
+import zio.http._
+
+object SimpleClient extends ZIOAppDefault {
+  val url = URL.decode("https://jsonplaceholder.typicode.com/todos").toOption.get
+
+  val program = for {
+    client <- ZIO.service[Client]
+    res    <- client.url(url).batched(Request.get("/"))
+    data   <- res.body.asString
+    _      <- Console.printLine(data)
+  } yield ()
+
+  override val run = program.provide(Client.default)
+}
+```
+
+## Client Architecture
+
+The ZIO HTTP client is built around the `ZClient` type:
+
+```scala
+final case class ZClient[-Env, ReqEnv, -In, +Err, +Out](
+  version: Version,
+  url: URL,
+  headers: Headers,
+  sslConfig: Option[ClientSSLConfig],
+  proxy: Option[Proxy],
+  bodyEncoder: ZClient.BodyEncoder[Env, Err, In],
+  bodyDecoder: ZClient.BodyDecoder[Env, Err, Out],
+  driver: ZClient.Driver[Env, ReqEnv, Err],
+)
+```
+
+Reference: [ZClient.scala:32](zio-http/shared/src/main/scala/zio/http/ZClient.scala:32)
+
+## Key Features
+
+### Batched vs Streaming Requests
+
+**Batched requests** materialize the full response into memory:
+
+```scala
+// Batched request - fully materializes response
+val batchedResponse: ZIO[Client, Throwable, Response] =
+  ZClient.batched(Request.get(url))
+```
+
+Reference: [ZClient.scala:295](zio-http/shared/src/main/scala/zio/http/ZClient.scala:295)
+
+**Streaming requests** allow you to process response bodies incrementally:
+
+```scala
+// Streaming request - requires Scope for resource management
+val streamingResponse: ZIO[Client & Scope, Throwable, Response] =
+  ZClient.streaming(Request.get(url))
+```
+
+Reference: [ZClient.scala:328](zio-http/shared/src/main/scala/zio/http/ZClient.scala:328)
+
+### Builder Pattern
+
+The client uses a fluent builder API:
+
+```scala
+val client = ZIO.serviceWith[Client] { client =>
+  client
+    .url(URL.decode("https://api.example.com").toOption.get)
+    .addPath("/users")
+    .addQueryParam("page", "1")
+    .addHeader(Header.Authorization.Bearer("token"))
+}
+```
+
+### Request Methods
+
+The client provides convenient methods for common HTTP verbs:
+
+```scala
+// GET request
+client.get("/users"): ZIO[Env & ReqEnv, Err, Out]
+
+// POST request with body
+client.post("/users")(userBody): ZIO[Env & ReqEnv, Err, Out]
+
+// PUT request with body
+client.put("/users/1")(updatedUser): ZIO[Env & ReqEnv, Err, Out]
+
+// DELETE request
+client.delete("/users/1"): ZIO[Env & ReqEnv, Err, Out]
+
+// PATCH request
+client.patch("/users/1"): ZIO[Env & ReqEnv, Err, Out]
+
+// HEAD request
+client.head("/users"): ZIO[Env & ReqEnv, Err, Out]
+```
+
+References: [ZClient.scala:116](zio-http/shared/src/main/scala/zio/http/ZClient.scala:116), [ZClient.scala:128](zio-http/shared/src/main/scala/zio/http/ZClient.scala:128), [ZClient.scala:167](zio-http/shared/src/main/scala/zio/http/ZClient.scala:167)
+
+## Client Layers
+
+### Default Client
+
+The simplest way to provide a client:
+
+```scala
+program.provide(Client.default)
+```
+
+### Custom Configuration
+
+For advanced use cases, customize the client configuration:
+
+```scala
+val clientConfig = ZClient.Config.default
+  .connectionTimeout(10.seconds)
+  .idleTimeout(30.seconds)
+  .dynamicConnectionPool(minimum = 10, maximum = 20, ttl = 5.seconds)
+
+program.provide(
+  ZLayer.succeed(clientConfig),
+  Client.live,
+  ZLayer.succeed(NettyConfig.default),
+  DnsResolver.default,
+)
+```
+
+Reference: [ZClient.scala:760](zio-http/shared/src/main/scala/zio/http/ZClient.scala:760)
+
+## Converting Between Batched and Streaming
+
+You can convert a streaming client to a batched client:
+
+```scala
+// Convert streaming client to batched
+val batchedClient = streamingClient.batched
+```
+
+Reference: [ZClient.scala:99](zio-http/shared/src/main/scala/zio/http/ZClient.scala:99)
+
+<Note>
+**Note**: When using `batched`, the full response body is materialized into memory. For large responses, consider using streaming mode instead.
+</Note>
+
+## Error Handling
+
+The client provides error handling utilities:
+
+```scala
+// Refine errors
+client.refineOrDie {
+  case e: IOException => MyCustomError(e)
+}
+
+// Die on specific errors
+client.dieOn(_.isInstanceOf[TimeoutException])
+
+// Map errors
+client.mapError(e => MyError(e.getMessage))
+```
+
+References: [ZClient.scala:173](zio-http/shared/src/main/scala/zio/http/ZClient.scala:173), [ZClient.scala:119](zio-http/shared/src/main/scala/zio/http/ZClient.scala:119)
+
+## Retry Logic
+
+Add retry behavior to your client:
+
+```scala
+import zio.Schedule
+
+val retryPolicy = Schedule.exponentialBackoff(1.second) && Schedule.recurs(3)
+
+val resilientClient = client.retry(retryPolicy)
+```
+
+Reference: [ZClient.scala:207](zio-http/shared/src/main/scala/zio/http/ZClient.scala:207)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Making Requests" icon="paper-plane" href="/client/making-requests">
+    Learn how to construct and send HTTP requests
+  </Card>
+  <Card title="Configuration" icon="gear" href="/client/configuration">
+    Configure connection pooling, timeouts, and SSL
+  </Card>
+  <Card title="WebSockets" icon="plug" href="/client/websockets">
+    Connect to WebSocket servers
+  </Card>
+</CardGroup>

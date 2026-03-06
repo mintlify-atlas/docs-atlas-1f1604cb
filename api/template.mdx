@@ -1,0 +1,549 @@
+---
+title: 'Template'
+description: 'Type-safe HTML generation with a lightweight DOM implementation'
+---
+
+## Overview
+
+ZIO HTTP includes a built-in templating system for type-safe HTML generation. The template system is lightweight, fast, and uses Scala's type system to prevent common HTML errors at compile time.
+
+## Dom
+
+The core type representing HTML elements and content.
+
+```scala
+sealed trait Dom {
+  def encode: CharSequence
+  def encode(spaces: Int): CharSequence
+}
+```
+
+### Creating Elements
+
+#### element
+
+Create an HTML element.
+
+```scala
+Dom.element(name: CharSequence, children: Dom*): Dom
+```
+
+```scala
+import zio.http.template._
+
+val div = Dom.element("div",
+  Dom.element("h1", Dom.text("Hello")),
+  Dom.element("p", Dom.text("World"))
+)
+```
+
+#### text
+
+Create text content (automatically escaped).
+
+```scala
+val text = Dom.text("<script>alert('XSS')</script>")
+// Renders as: &lt;script&gt;alert('XSS')&lt;/script&gt;
+```
+
+#### raw
+
+Create raw HTML (not escaped).
+
+```scala
+val raw = Dom.raw("<strong>Bold</strong>")
+// Renders as: <strong>Bold</strong>
+```
+
+#### attr
+
+Create an attribute.
+
+```scala
+Dom.attr(name: CharSequence, value: CharSequence): Dom
+```
+
+### Element Helpers
+
+Pre-defined helper methods for common HTML elements.
+
+<Tabs>
+  <Tab title="Structure">
+    ```scala
+    import zio.http.template._
+    
+    html(
+      head(
+        title("Page Title"),
+        meta(charsetAttr := "UTF-8")
+      ),
+      body(
+        div(styleAttr := "color: red",
+          h1("Heading"),
+          p("Paragraph")
+        )
+      )
+    )
+    ```
+  </Tab>
+  <Tab title="Forms">
+    ```scala
+    form(methodAttr := "post", actionAttr := "/submit",
+      input(typeAttr := "text", nameAttr := "username"),
+      input(typeAttr := "password", nameAttr := "password"),
+      button(typeAttr := "submit", "Login")
+    )
+    ```
+  </Tab>
+  <Tab title="Lists">
+    ```scala
+    ul(
+      li("Item 1"),
+      li("Item 2"),
+      li("Item 3")
+    )
+    
+    ol(
+      li("First"),
+      li("Second"),
+      li("Third")
+    )
+    ```
+  </Tab>
+  <Tab title="Tables">
+    ```scala
+    table(
+      thead(
+        tr(
+          th("Name"),
+          th("Age")
+        )
+      ),
+      tbody(
+        tr(
+          td("Alice"),
+          td("30")
+        ),
+        tr(
+          td("Bob"),
+          td("25")
+        )
+      )
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Common Elements
+
+A comprehensive list of HTML element helpers:
+
+### Document Structure
+- `html` - Root HTML element
+- `head` - Document head
+- `body` - Document body
+- `title` - Page title
+- `meta` - Metadata
+- `link` - External resource link
+- `style` - Inline CSS
+- `script` - JavaScript
+
+### Text Content
+- `h1`, `h2`, `h3`, `h4`, `h5`, `h6` - Headings
+- `p` - Paragraph
+- `span` - Inline container
+- `div` - Block container
+- `strong` - Strong emphasis (bold)
+- `em` - Emphasis (italic)
+- `code` - Inline code
+- `pre` - Preformatted text
+
+### Lists
+- `ul` - Unordered list
+- `ol` - Ordered list
+- `li` - List item
+
+### Links & Media
+- `a` - Hyperlink
+- `img` - Image
+- `audio` - Audio
+- `video` - Video
+
+### Forms
+- `form` - Form
+- `input` - Input field
+- `button` - Button
+- `select` - Dropdown
+- `option` - Dropdown option
+- `textarea` - Multi-line text input
+- `label` - Form label
+
+### Tables
+- `table` - Table
+- `thead` - Table header
+- `tbody` - Table body
+- `tr` - Table row
+- `th` - Table header cell
+- `td` - Table data cell
+
+## Attributes
+
+Common HTML attributes:
+
+```scala
+import zio.http.template._
+
+// Standard attributes
+idAttr := "my-id"
+classAttr := "container"
+styleAttr := "color: blue; font-size: 14px"
+hrefAttr := "/path"
+srcAttr := "/image.png"
+altAttr := "Description"
+
+// Form attributes
+typeAttr := "text"
+nameAttr := "username"
+valueAttr := "default"
+placeholderAttr := "Enter text"
+
+// Boolean attributes
+disabledAttr
+readonlyAttr
+requiredAttr
+checkedAttr
+```
+
+### Custom Attributes
+
+```scala
+val customAttr = Dom.attr("data-user-id", "123")
+
+div(customAttr,
+  Dom.text("Content")
+)
+```
+
+## Html Type
+
+Wrapper type for composing HTML content.
+
+```scala
+sealed trait Html {
+  def encode: CharSequence
+  def ++(that: Html): Html
+}
+```
+
+### Composition
+
+```scala
+val header: Html = div(h1("Title"))
+val content: Html = div(p("Content"))
+val footer: Html = div(p("Footer"))
+
+val page = header ++ content ++ footer
+```
+
+### Conditional Rendering
+
+```scala
+def renderUser(user: Option[User]): Html =
+  user match {
+    case Some(u) =>
+      div(
+        h2(u.name),
+        p(u.email)
+      )
+    case None =>
+      div(
+        p("No user found")
+      )
+  }
+```
+
+### List Rendering
+
+```scala
+def renderUsers(users: List[User]): Html =
+  div(
+    ul(
+      users.map { user =>
+        li(user.name)
+      }: _*
+    )
+  )
+```
+
+## Template Object
+
+Pre-built template utilities.
+
+### container
+
+Create a styled container page.
+
+```scala
+import zio.http.template.Template
+
+val page = Template.container("Page Title") {
+  div(
+    h2("Section"),
+    p("Content here")
+  )
+}
+```
+
+This generates a complete HTML page with:
+- Basic styling
+- Proper HTML structure
+- Responsive layout
+
+## Response Integration
+
+Convert templates to HTTP responses:
+
+```scala
+import zio.http._
+import zio.http.template._
+
+val htmlContent = html(
+  body(
+    h1("Hello, World!")
+  )
+)
+
+// As Response
+val response = Response.html(htmlContent)
+
+// In handler
+val route = Method.GET / "page" -> handler {
+  Response.html(htmlContent)
+}
+```
+
+## Type-Safe Patterns
+
+### Component Functions
+
+```scala
+def card(title: String, content: String): Html =
+  div(classAttr := "card",
+    div(classAttr := "card-title", title),
+    div(classAttr := "card-content", content)
+  )
+
+// Usage
+val myCard = card("Title", "Some content")
+```
+
+### Layout Components
+
+```scala
+def layout(title: String, content: Html): Html =
+  html(
+    head(
+      Template.title(title),
+      link(relAttr := "stylesheet", hrefAttr := "/styles.css")
+    ),
+    body(
+      div(classAttr := "container",
+        content
+      )
+    )
+  )
+
+// Usage
+val page = layout("My Page",
+  div(
+    h1("Welcome"),
+    p("Content")
+  )
+)
+```
+
+### Navigation Components
+
+```scala
+case class NavItem(label: String, href: String)
+
+def navbar(items: List[NavItem]): Html =
+  nav(
+    ul(classAttr := "nav",
+      items.map { item =>
+        li(
+          a(hrefAttr := item.href, item.label)
+        )
+      }: _*
+    )
+  )
+
+val nav = navbar(List(
+  NavItem("Home", "/"),
+  NavItem("About", "/about"),
+  NavItem("Contact", "/contact")
+))
+```
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+import zio.http.template._
+
+case class User(id: Int, name: String, email: String)
+
+object UserPage {
+  def render(user: User): Html =
+    layout(s"User: ${user.name}") {
+      div(classAttr := "user-profile",
+        header(
+          h1(user.name),
+          p(classAttr := "email", user.email)
+        ),
+        section(
+          h2("User Details"),
+          table(
+            tr(td("ID:"), td(user.id.toString)),
+            tr(td("Name:"), td(user.name)),
+            tr(td("Email:"), td(user.email))
+          )
+        )
+      )
+    }
+  
+  def renderList(users: List[User]): Html =
+    layout("Users") {
+      div(
+        h1("All Users"),
+        table(classAttr := "users-table",
+          thead(
+            tr(
+              th("ID"),
+              th("Name"),
+              th("Email"),
+              th("Actions")
+            )
+          ),
+          tbody(
+            users.map { user =>
+              tr(
+                td(user.id.toString),
+                td(user.name),
+                td(user.email),
+                td(
+                  a(hrefAttr := s"/users/${user.id}", "View")
+                )
+              )
+            }: _*
+          )
+        )
+      )
+    }
+  
+  private def layout(title: String, content: Html): Html =
+    html(
+      head(
+        Template.title(s"$title - My App"),
+        meta(charsetAttr := "UTF-8"),
+        meta(nameAttr := "viewport", contentAttr := "width=device-width, initial-scale=1"),
+        link(relAttr := "stylesheet", hrefAttr := "/static/styles.css"),
+        style(
+          """
+          body { font-family: sans-serif; margin: 0; padding: 20px; }
+          table { border-collapse: collapse; width: 100%; }
+          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+          th { background-color: #f2f2f2; }
+          """
+        )
+      ),
+      body(
+        navbar,
+        div(classAttr := "container",
+          content
+        )
+      )
+    )
+  
+  private val navbar: Html =
+    nav(
+      ul(
+        li(a(hrefAttr := "/", "Home")),
+        li(a(hrefAttr := "/users", "Users")),
+        li(a(hrefAttr := "/about", "About"))
+      )
+    )
+}
+
+object UserRoutes {
+  def routes(userService: UserService): Routes[Any, Nothing] =
+    Routes(
+      Method.GET / "users" -> handler {
+        userService.getAll.map { users =>
+          Response.html(UserPage.renderList(users))
+        }
+      },
+      
+      Method.GET / "users" / int("userId") -> handler { (userId: Int, _: Request) =>
+        userService.getById(userId).map {
+          case Some(user) =>
+            Response.html(UserPage.render(user))
+          case None =>
+            Response.notFound
+        }
+      }
+    )
+}
+```
+
+## Best Practices
+
+### 1. Use Component Functions
+
+Extract reusable components:
+
+```scala
+def button(label: String, onClick: String): Html =
+  button(typeAttr := "button", onclickAttr := onClick, label)
+```
+
+### 2. Separate Layout from Content
+
+```scala
+def page(content: Html): Html =
+  layout(content)
+
+def layout(content: Html): Html =
+  html(head(...), body(content))
+```
+
+### 3. Type-Safe Attributes
+
+Use the provided attribute helpers instead of strings:
+
+```scala
+// Good
+div(classAttr := "container")
+
+// Avoid
+Dom.element("div", Dom.attr("class", "container"))
+```
+
+### 4. XSS Protection
+
+Always use `Dom.text()` for user content:
+
+```scala
+// Safe - automatically escaped
+p(Dom.text(userInput))
+
+// Dangerous - not escaped
+Dom.raw(userInput)
+```
+
+## See Also
+
+- [Response](/core/response) - HTTP responses
+- [Handler](/core/handler) - Request handlers
+- [Routes](/core/routes) - Route definition

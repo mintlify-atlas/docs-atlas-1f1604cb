@@ -1,0 +1,456 @@
+---
+title: Authentication & Authorization
+description: Implement JWT authentication, bearer tokens, and protect routes with middleware
+---
+
+This example demonstrates how to implement authentication and authorization in ZIO HTTP. You'll learn how to create a login system with JWT tokens, protect routes with bearer authentication middleware, and handle authentication errors gracefully.
+
+## Complete Example
+
+Here's a complete authentication server with JWT tokens:
+
+```scala
+//> using dep "dev.zio::zio-http:3.4.0"
+//> using dep "com.github.jwt-scala::jwt-core:10.0.4"
+
+package example
+
+import java.time.Clock
+import scala.util.Try
+import zio._
+import zio.http._
+import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
+
+/**
+ * This is an example to demonstrate bearer Authentication middleware.
+ * The Server has 2 routes:
+ * 1. Login route - Returns a JWT token upon successful authentication
+ * 2. Protected route - Accessible only with a valid JWT token
+ */
+object AuthenticationServer extends ZIOAppDefault {
+  implicit val clock: Clock = Clock.systemUTC
+
+  // Secret Authentication key
+  val SECRET_KEY = "secretKey"
+
+  def jwtEncode(username: String, key: String): String =
+    Jwt.encode(
+      JwtClaim(subject = Some(username))
+        .issuedNow
+        .expiresIn(300), // 5 minutes
+      key,
+      JwtAlgorithm.HS512
+    )
+
+  def jwtDecode(token: String, key: String): Try[JwtClaim] =
+    Jwt.decode(token, key, Seq(JwtAlgorithm.HS512))
+
+  val bearerAuthWithContext: HandlerAspect[Any, String] =
+    HandlerAspect.interceptIncomingHandler(
+      Handler.fromFunctionZIO[Request] { request =>
+        request.header(Header.Authorization) match {
+          case Some(Header.Authorization.Bearer(token)) =>
+            ZIO
+              .fromTry(jwtDecode(token.value.asString, SECRET_KEY))
+              .orElseFail(Response.badRequest("Invalid or expired token!"))
+              .flatMap(claim => 
+                ZIO.fromOption(claim.subject)
+                  .orElseFail(Response.badRequest("Missing subject claim!"))
+              )
+              .map(u => (request, u))
+
+          case _ => 
+            ZIO.fail(
+              Response.unauthorized.addHeaders(
+                Headers(Header.WWWAuthenticate.Bearer(realm = "Access"))
+              )
+            )
+        }
+      }
+    )
+
+  def routes: Routes[Any, Response] =
+    Routes(
+      // A route that is accessible only via a jwt token
+      Method.GET / "profile" / "me" -> handler { (_: Request) =>
+        ZIO.serviceWith[String](name => Response.text(s"Welcome $name!"))
+      } @@ bearerAuthWithContext,
+
+      // A login route that is successful only if the password is the reverse of the username
+      Method.GET / "login" -> handler { (request: Request) =>
+        val form = request.body.asMultipartForm
+          .orElseFail(Response.badRequest)
+        
+        for {
+          formData <- form
+          username <- ZIO.fromOption(formData.get("username"))
+            .orElseFail(Response.badRequest("Missing username field!"))
+            .flatMap(ff => 
+              ZIO.fromOption(ff.stringValue)
+                .orElseFail(Response.badRequest("Missing username value!"))
+            )
+          password <- ZIO.fromOption(formData.get("password"))
+            .orElseFail(Response.badRequest("Missing password field!"))
+            .flatMap(ff => 
+              ZIO.fromOption(ff.stringValue)
+                .orElseFail(Response.badRequest("Missing password value!"))
+            )
+        } yield
+          if (password.reverse.hashCode == username.hashCode)
+            Response.text(jwtEncode(username, SECRET_KEY))
+          else
+            Response.unauthorized("Invalid username or password.")
+      },
+    ) @@ Middleware.debug
+
+  override val run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## What This Example Demonstrates
+
+This authentication example showcases several security patterns:
+
+- **JWT Tokens**: Industry-standard JSON Web Tokens for stateless authentication
+- **Bearer Authentication**: Using the Authorization header for protected routes
+- **Middleware**: Reusable authentication logic applied to routes
+- **Token Validation**: Checking expiration and signature
+- **Context Propagation**: Making authenticated user info available to handlers
+- **Error Responses**: Proper HTTP status codes (401, 403) for auth failures
+
+## Step-by-Step Walkthrough
+
+<Steps>
+
+### Set Up JWT Utilities
+
+Create functions for encoding and decoding JWT tokens:
+
+```scala
+implicit val clock: Clock = Clock.systemUTC
+val SECRET_KEY = "secretKey"
+
+def jwtEncode(username: String, key: String): String =
+  Jwt.encode(
+    JwtClaim(subject = Some(username))
+      .issuedNow
+      .expiresIn(300), // 5 minutes
+    key,
+    JwtAlgorithm.HS512
+  )
+```
+
+Key points:
+- Use a strong secret key in production (load from environment)
+- `expiresIn(300)` sets token expiration to 5 minutes
+- `HS512` is a strong signing algorithm
+
+### Create Authentication Middleware
+
+Build middleware that validates bearer tokens:
+
+```scala
+val bearerAuthWithContext: HandlerAspect[Any, String] =
+  HandlerAspect.interceptIncomingHandler(
+    Handler.fromFunctionZIO[Request] { request =>
+      request.header(Header.Authorization) match {
+        case Some(Header.Authorization.Bearer(token)) =>
+          // Validate and decode token
+          ZIO
+            .fromTry(jwtDecode(token.value.asString, SECRET_KEY))
+            .orElseFail(Response.badRequest("Invalid or expired token!"))
+            .flatMap(claim => 
+              ZIO.fromOption(claim.subject)
+                .orElseFail(Response.badRequest("Missing subject claim!"))
+            )
+            .map(u => (request, u))
+
+        case _ => 
+          // No auth header or not Bearer type
+          ZIO.fail(
+            Response.unauthorized.addHeaders(
+              Headers(Header.WWWAuthenticate.Bearer(realm = "Access"))
+            )
+          )
+      }
+    }
+  )
+```
+
+This middleware:
+- Extracts the Authorization header
+- Validates it's a Bearer token
+- Decodes and validates the JWT
+- Returns 401 Unauthorized if invalid
+- Provides the username to the handler
+
+### Implement Login Route
+
+Create a route that issues JWT tokens:
+
+```scala
+Method.GET / "login" -> handler { (request: Request) =>
+  for {
+    form <- request.body.asMultipartForm
+      .orElseFail(Response.badRequest)
+    
+    username <- ZIO.fromOption(form.get("username"))
+      .orElseFail(Response.badRequest("Missing username field!"))
+      .flatMap(ff => 
+        ZIO.fromOption(ff.stringValue)
+          .orElseFail(Response.badRequest("Missing username value!"))
+      )
+    
+    password <- ZIO.fromOption(form.get("password"))
+      .orElseFail(Response.badRequest("Missing password field!"))
+      .flatMap(ff => 
+        ZIO.fromOption(ff.stringValue)
+          .orElseFail(Response.badRequest("Missing password value!"))
+      )
+  } yield
+    if (password.reverse.hashCode == username.hashCode)
+      Response.text(jwtEncode(username, SECRET_KEY))
+    else
+      Response.unauthorized("Invalid username or password.")
+}
+```
+
+<Note>
+  The password validation logic here is for demonstration only. In production, use proper password hashing with bcrypt or Argon2.
+</Note>
+
+### Protect Routes with Middleware
+
+Apply authentication middleware to protected routes:
+
+```scala
+Method.GET / "profile" / "me" -> handler { (_: Request) =>
+  ZIO.serviceWith[String](name => Response.text(s"Welcome $name!"))
+} @@ bearerAuthWithContext
+```
+
+The `@@ bearerAuthWithContext` applies the middleware, which:
+- Validates the token before the handler runs
+- Provides the username via ZIO's service pattern
+- Returns 401 if authentication fails
+
+### Combine Routes
+
+Combine public and protected routes:
+
+```scala
+def routes: Routes[Any, Response] =
+  Routes(
+    Method.GET / "profile" / "me" -> protectedHandler @@ bearerAuthWithContext,
+    Method.GET / "login" -> loginHandler,
+  ) @@ Middleware.debug
+```
+
+The `Middleware.debug` logs all requests (remove in production).
+
+</Steps>
+
+## How to Run
+
+Save the code and run it:
+
+```bash
+scala-cli run AuthenticationServer.scala
+```
+
+## Test the Authentication Flow
+
+### Step 1: Login to Get a Token
+
+```bash
+# Login with valid credentials (password is reverse of username)
+curl -X GET http://localhost:8080/login \
+  -F "username=alice" \
+  -F "password=ecila"
+
+# Output: (JWT token string)
+eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9...
+```
+
+Save this token for the next requests.
+
+### Step 2: Try Accessing Protected Route Without Token
+
+```bash
+curl -i http://localhost:8080/profile/me
+
+# Output:
+# HTTP/1.1 401 Unauthorized
+# WWW-Authenticate: Bearer realm="Access"
+```
+
+### Step 3: Access Protected Route With Token
+
+```bash
+curl -H "Authorization: Bearer eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9..." \
+  http://localhost:8080/profile/me
+
+# Output:
+Welcome alice!
+```
+
+### Step 4: Try With Invalid Token
+
+```bash
+curl -H "Authorization: Bearer invalid-token" \
+  http://localhost:8080/profile/me
+
+# Output:
+# HTTP/1.1 400 Bad Request
+# Invalid or expired token!
+```
+
+## Expected Output
+
+When you start the server:
+
+```
+Started server on port: 8080
+```
+
+Successful login returns a JWT token (long string).
+
+Authenticated requests to `/profile/me` return: `Welcome <username>!`
+
+Failed authentication returns:
+- `401 Unauthorized` - No token or invalid token
+- `400 Bad Request` - Malformed request
+
+## Advanced: Basic Authentication
+
+ZIO HTTP also supports Basic Authentication:
+
+```scala
+object BasicAuthExample extends ZIOAppDefault {
+  
+  // Validate username/password
+  def validateCredentials(username: String, password: String): Boolean = {
+    // In production, check against database with hashed passwords
+    username == "admin" && password == "password123"
+  }
+
+  val basicAuth: HandlerAspect[Any, String] =
+    HandlerAspect.interceptIncomingHandler(
+      Handler.fromFunctionZIO[Request] { request =>
+        request.header(Header.Authorization) match {
+          case Some(Header.Authorization.Basic(username, password)) =>
+            if (validateCredentials(username, password))
+              ZIO.succeed((request, username))
+            else
+              ZIO.fail(Response.unauthorized("Invalid credentials"))
+          
+          case _ =>
+            ZIO.fail(
+              Response.unauthorized.addHeaders(
+                Headers(Header.WWWAuthenticate.Basic(realm = "Secure Area"))
+              )
+            )
+        }
+      }
+    )
+
+  val routes = Routes(
+    Method.GET / "admin" -> handler { (_: Request) =>
+      ZIO.serviceWith[String](user => Response.text(s"Hello admin $user"))
+    } @@ basicAuth
+  )
+
+  override val run = Server.serve(routes).provide(Server.default)
+}
+```
+
+Test basic auth:
+
+```bash
+curl -u admin:password123 http://localhost:8080/admin
+# Output: Hello admin admin
+```
+
+## Advanced: Role-Based Access Control
+
+Extend authentication with authorization:
+
+```scala
+case class User(username: String, roles: Set[String])
+
+def requireRole(role: String): HandlerAspect[Any, User] =
+  HandlerAspect.interceptIncomingHandler(
+    Handler.fromFunctionZIO[Request] { request =>
+      // First, validate the JWT and get user
+      for {
+        token <- ZIO.fromOption(
+          request.header(Header.Authorization)
+            .collect { case Header.Authorization.Bearer(t) => t }
+        ).orElseFail(Response.unauthorized)
+        
+        claim <- ZIO.fromTry(
+          jwtDecode(token.value.asString, SECRET_KEY)
+        ).orElseFail(Response.unauthorized("Invalid token"))
+        
+        username <- ZIO.fromOption(claim.subject)
+          .orElseFail(Response.badRequest("Missing subject"))
+        
+        // In production, fetch user roles from database
+        user = User(username, Set("user", "admin"))
+        
+        // Check if user has required role
+        _ <- ZIO.when(!user.roles.contains(role))(
+          ZIO.fail(Response.forbidden(s"Requires $role role"))
+        )
+      } yield (request, user)
+    }
+  )
+
+// Usage:
+Method.GET / "admin" / "users" -> handler { (_: Request) =>
+  ZIO.serviceWith[User](user => 
+    Response.text(s"Admin ${user.username} viewing all users")
+  )
+} @@ requireRole("admin")
+```
+
+## Security Best Practices
+
+<Warning>
+  **Production Security Checklist:**
+  
+  - Use strong, randomly-generated secret keys
+  - Store secrets in environment variables, not code
+  - Use HTTPS in production (never send tokens over HTTP)
+  - Hash passwords with bcrypt or Argon2
+  - Implement token refresh mechanism
+  - Add rate limiting to prevent brute force attacks
+  - Log authentication failures
+  - Set appropriate token expiration times
+  - Validate token claims thoroughly
+</Warning>
+
+Example with environment-based configuration:
+
+```scala
+val SECRET_KEY = sys.env.getOrElse(
+  "JWT_SECRET",
+  throw new IllegalStateException("JWT_SECRET not set")
+)
+```
+
+## Key Takeaways
+
+- **JWT Tokens**: Stateless authentication without server-side session storage
+- **Middleware Pattern**: Reusable authentication logic applied with `@@`
+- **Type Safety**: Validated tokens provide typed user context
+- **Standard HTTP**: Uses standard Authorization header and status codes
+- **Composable**: Combine with other middleware (CORS, logging, etc.)
+- **Flexible**: Support multiple auth schemes (Bearer, Basic, Custom)
+
+## Next Steps
+
+- [REST API](/examples/rest-api) - Build authenticated APIs
+- [Middleware](/docs/middleware) - Learn about other middleware options
+- [WebSocket Chat](/examples/websocket-chat) - Add authentication to WebSockets
+- [Security](/docs/security) - Advanced security topics

@@ -1,0 +1,537 @@
+---
+title: WebSockets
+description: Build real-time bidirectional communication with ZIO HTTP WebSockets
+---
+
+ZIO HTTP provides first-class support for WebSocket connections, enabling real-time bidirectional communication between clients and servers.
+
+## Quick Start
+
+Create a simple echo WebSocket server:
+
+```scala
+import zio._
+import zio.http._
+
+object EchoWebSocket extends ZIOAppDefault {
+  val socket = Handler.webSocket { channel =>
+    channel.receiveAll {
+      case ChannelEvent.Read(WebSocketFrame.Text(text)) =>
+        channel.send(ChannelEvent.Read(WebSocketFrame.text(text)))
+      case _ => ZIO.unit
+    }
+  }
+
+  val routes = Routes(
+    Method.GET / "ws" -> socket.toResponse
+  )
+
+  def run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## Handler.webSocket
+
+The primary way to create WebSocket applications is via `Handler.webSocket`:
+
+```scala
+def webSocket[Env](
+  f: WebSocketChannel => ZIO[Env, Throwable, Any]
+): WebSocketApp[Env]
+```
+
+This creates a `WebSocketApp` that handles WebSocket connections with access to the `WebSocketChannel`.
+
+## WebSocketChannel
+
+The `WebSocketChannel` provides methods for sending and receiving WebSocket frames:
+
+### Receiving Messages
+
+Use `receiveAll` to handle all channel events:
+
+```scala
+val socket = Handler.webSocket { channel =>
+  channel.receiveAll {
+    case ChannelEvent.Read(frame) => 
+      // Handle incoming frame
+      ZIO.logInfo(s"Received: $frame")
+    case ChannelEvent.Unregistered =>
+      // Connection closed
+      ZIO.logInfo("Client disconnected")
+    case ChannelEvent.UserEventTriggered(event) =>
+      // Handle user events (like HandshakeComplete)
+      ZIO.logInfo(s"Event: $event")
+    case _ => ZIO.unit
+  }
+}
+```
+
+### Sending Messages
+
+Send frames using `channel.send`:
+
+```scala
+val socket = Handler.webSocket { channel =>
+  channel.send(ChannelEvent.Read(WebSocketFrame.text("Hello!")))
+}
+```
+
+### Closing Connections
+
+Gracefully close the connection:
+
+```scala
+val socket = Handler.webSocket { channel =>
+  channel.receiveAll {
+    case ChannelEvent.Read(WebSocketFrame.Text("quit")) =>
+      channel.send(ChannelEvent.Read(WebSocketFrame.close(1000))) *>
+      channel.shutdown
+    case _ => ZIO.unit
+  }
+}
+```
+
+## WebSocket Frames
+
+ZIO HTTP supports different frame types:
+
+```scala
+// Text frames
+WebSocketFrame.text("Hello, WebSocket!")
+
+// Binary frames
+WebSocketFrame.binary(Chunk.fromArray(bytes))
+
+// Close frames
+WebSocketFrame.close(1000)  // Normal closure
+WebSocketFrame.close(1001, "Going away")
+
+// Ping/Pong frames (for keep-alive)
+WebSocketFrame.ping
+WebSocketFrame.pong
+```
+
+## Channel Events
+
+WebSocket channels emit various events:
+
+```scala
+import zio.http.ChannelEvent._
+
+val socket = Handler.webSocket { channel =>
+  channel.receiveAll {
+    case Read(frame) =>
+      // New frame received
+      handleFrame(frame)
+      
+    case UserEventTriggered(UserEvent.HandshakeComplete) =>
+      // WebSocket handshake completed
+      channel.send(Read(WebSocketFrame.text("Welcome!")))
+      
+    case Unregistered =>
+      // Connection closed/unregistered
+      ZIO.logInfo("Cleanup resources")
+      
+    case ExceptionCaught(cause) =>
+      // Error occurred
+      ZIO.logError(s"Error: $cause")
+      
+    case _ => ZIO.unit
+  }
+}
+```
+
+## WebSocketApp
+
+The `WebSocketApp` type represents a WebSocket application:
+
+```scala
+final case class WebSocketApp[-R](
+  handler: Handler[R, Throwable, WebSocketChannel, Any],
+  customConfig: Option[WebSocketConfig]
+)
+```
+
+### Converting to Routes
+
+Convert a WebSocketApp to Routes:
+
+```scala
+val socket = Handler.webSocket { channel =>
+  channel.receiveAll {
+    case ChannelEvent.Read(frame) => channel.send(ChannelEvent.Read(frame))
+    case _ => ZIO.unit
+  }
+}
+
+val routes = socket.toRoutes
+// Or inline:
+val routes2 = Routes(
+  Method.GET / "ws" -> socket.toResponse
+)
+```
+
+### Custom Configuration
+
+Apply custom WebSocket configuration:
+
+```scala
+val wsConfig = WebSocketConfig.default
+  .handshakeTimeout(10.seconds)
+  .forceCloseTimeout(5.seconds)
+
+val socket = Handler.webSocket { channel =>
+  channel.receiveAll {
+    case ChannelEvent.Read(frame) => channel.send(ChannelEvent.Read(frame))
+    case _ => ZIO.unit
+  }
+}.withConfig(wsConfig)
+```
+
+### Providing Dependencies
+
+Provide environment to WebSocketApp:
+
+```scala
+trait ChatService {
+  def broadcast(message: String): UIO[Unit]
+  def subscribe: UStream[String]
+}
+
+val socket = Handler.webSocket { channel =>
+  ZIO.serviceWithZIO[ChatService] { chat =>
+    chat.subscribe
+      .foreach(msg => channel.send(Read(WebSocketFrame.text(msg))))
+      .forkScoped *>
+    channel.receiveAll {
+      case Read(WebSocketFrame.Text(text)) =>
+        chat.broadcast(text)
+      case _ => ZIO.unit
+    }
+  }
+}
+
+val app = socket.provideLayer(ChatServiceLive.layer)
+```
+
+## WebSocketConfig
+
+Configure WebSocket behavior:
+
+```scala
+val config = WebSocketConfig.default
+  .handshakeTimeout(10.seconds)        // Handshake timeout (default: 10s)
+  .forceCloseTimeout(5.seconds)        // Force close after timeout (default: -1, disabled)
+  .subProtocol(Some("chat"))           // WebSocket sub-protocol
+  .forwardCloseFrames(true)            // Forward close frames to handler
+  .forwardPongFrames(true)             // Forward pong frames to handler
+  .closeStatus(WebSocketConfig.CloseStatus.NormalClosure)
+```
+
+### Close Status Codes
+
+```scala
+import zio.http.WebSocketConfig.CloseStatus
+
+CloseStatus.NormalClosure           // 1000
+CloseStatus.EndpointUnavailable     // 1001
+CloseStatus.ProtocolError           // 1002
+CloseStatus.InvalidMessageType      // 1003
+CloseStatus.InvalidPayloadData      // 1004
+CloseStatus.PolicyViolation         // 1005
+CloseStatus.MessageTooBig           // 1006
+CloseStatus.InternalServerError     // 1011
+CloseStatus.Custom(code, reason)    // Custom code and reason
+```
+
+### Decoder Configuration
+
+Control frame decoding:
+
+```scala
+val decoder = SocketDecoder.default
+  .maxFramePayloadLength(65536)  // Max frame size
+  .expectMaskedFrames(true)      // Expect masked frames from client
+  .allowMaskMismatch(false)      // Strict mask enforcement
+
+val wsConfig = WebSocketConfig.default
+  .decoderConfig(decoder)
+```
+
+## Real-World Examples
+
+### Chat Server
+
+```scala
+import zio._
+import zio.http._
+import zio.stream._
+
+object ChatServer extends ZIOAppDefault {
+  final case class ChatRoom(
+    subscribers: Hub[String],
+    names: Ref[Map[String, String]]
+  )
+
+  val chatRoom = ZLayer.scoped {
+    for {
+      hub <- Hub.unbounded[String]
+      names <- Ref.make(Map.empty[String, String])
+    } yield ChatRoom(hub, names)
+  }
+
+  val socket = Handler.webSocket { channel =>
+    ZIO.serviceWithZIO[ChatRoom] { room =>
+      for {
+        clientId <- Random.nextUUID.map(_.toString.take(8))
+        _        <- room.names.update(_ + (clientId -> s"User-$clientId"))
+        queue    <- room.subscribers.subscribe
+        
+        // Send messages from room to client
+        _ <- ZStream.fromQueue(queue)
+          .foreach { msg =>
+            channel.send(Read(WebSocketFrame.text(msg)))
+          }
+          .forkScoped
+        
+        // Handle messages from client
+        _ <- channel.receiveAll {
+          case Read(WebSocketFrame.Text(text)) =>
+            for {
+              names <- room.names.get
+              name = names.getOrElse(clientId, "Unknown")
+              _ <- room.subscribers.publish(s"$name: $text")
+            } yield ()
+            
+          case Unregistered =>
+            room.names.update(_ - clientId) *>
+            room.subscribers.publish(s"User-$clientId left")
+            
+          case _ => ZIO.unit
+        }
+      } yield ()
+    }
+  }
+
+  val routes = Routes(
+    Method.GET / "chat" -> socket.toResponse
+  )
+
+  def run = Server.serve(routes).provide(
+    Server.default,
+    chatRoom
+  )
+}
+```
+
+### Ping/Pong Keep-Alive
+
+```scala
+val socket = Handler.webSocket { channel =>
+  val ping = channel.send(Read(WebSocketFrame.ping))
+    .repeat(Schedule.fixed(30.seconds))
+    .forkScoped
+
+  ping *> channel.receiveAll {
+    case Read(WebSocketFrame.Pong(_)) =>
+      ZIO.logDebug("Received pong")
+    case Read(frame) =>
+      handleFrame(frame)
+    case _ => ZIO.unit
+  }
+}
+```
+
+### Binary Data Streaming
+
+```scala
+import zio.stream._
+
+val socket = Handler.webSocket { channel =>
+  // Stream binary data to client
+  val dataStream = ZStream.fromFile(new java.io.File("data.bin"))
+    .grouped(8192)
+    .foreach { chunk =>
+      channel.send(Read(WebSocketFrame.binary(chunk)))
+    }
+    .forkScoped
+
+  dataStream *> channel.receiveAll {
+    case Read(WebSocketFrame.Binary(data)) =>
+      processData(data)
+    case _ => ZIO.unit
+  }
+}
+```
+
+### Authentication
+
+```scala
+val socket = Handler.webSocket { channel =>
+  channel.receiveAll {
+    case UserEventTriggered(UserEvent.HandshakeComplete) =>
+      // Request authentication
+      channel.send(Read(WebSocketFrame.text("AUTH_REQUIRED")))
+      
+    case Read(WebSocketFrame.Text(token)) =>
+      validateToken(token).flatMap {
+        case Some(user) =>
+          channel.send(Read(WebSocketFrame.text("AUTH_SUCCESS"))) *>
+          handleAuthenticatedConnection(channel, user)
+        case None =>
+          channel.send(Read(WebSocketFrame.close(1008, "Unauthorized"))) *>
+          channel.shutdown
+      }
+      
+    case _ => ZIO.unit
+  }
+}
+```
+
+## Client WebSocket Connections
+
+Connect as a WebSocket client:
+
+```scala
+import zio._
+import zio.http._
+
+val clientSocket = Handler.webSocket { channel =>
+  channel.receiveAll {
+    case ChannelEvent.UserEventTriggered(UserEvent.HandshakeComplete) =>
+      channel.send(Read(WebSocketFrame.text("Hello from client!")))
+      
+    case Read(WebSocketFrame.Text(text)) =>
+      Console.printLine(s"Received: $text")
+      
+    case _ => ZIO.unit
+  }
+}
+
+val program = ZIO.scoped {
+  clientSocket.connect(
+    "ws://localhost:8080/ws",
+    headers = Headers(Header.Authorization.Basic("user", "pass"))
+  )
+}
+
+program.provide(
+  Client.default,
+  Scope.default
+)
+```
+
+## Testing WebSockets
+
+```scala
+import zio.test._
+import zio.http._
+
+object WebSocketSpec extends ZIOSpecDefault {
+  val echo = Handler.webSocket { channel =>
+    channel.receiveAll {
+      case Read(frame) => channel.send(Read(frame))
+      case _ => ZIO.unit
+    }
+  }
+
+  def spec = suite("WebSocket")(
+    test("echo server") {
+      for {
+        msg <- Ref.make[Option[String]](None)
+        
+        client = Handler.webSocket { channel =>
+          channel.receiveAll {
+            case UserEventTriggered(UserEvent.HandshakeComplete) =>
+              channel.send(Read(WebSocketFrame.text("test")))
+            case Read(WebSocketFrame.Text(text)) =>
+              msg.set(Some(text)) *> channel.shutdown
+            case _ => ZIO.unit
+          }
+        }
+        
+        _ <- echo.toRoutes.deployWS.runZIO(client)
+        result <- msg.get
+      } yield assertTrue(result.contains("test"))
+    }
+  )
+}
+```
+
+## Server Configuration
+
+Configure WebSocket settings at the server level:
+
+```scala
+val wsConfig = WebSocketConfig.default
+  .handshakeTimeout(15.seconds)
+  .forceCloseTimeout(10.seconds)
+
+val serverConfig = Server.Config.default
+  .port(8080)
+  .webSocketConfig(wsConfig)
+
+val app = Server.serve(routes).provide(
+  ZLayer.succeed(serverConfig) >>> Server.live
+)
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Handle All Events">
+    Always handle `Unregistered` events to clean up resources:
+    
+    ```scala
+    channel.receiveAll {
+      case Read(frame) => processFrame(frame)
+      case Unregistered => cleanup()
+      case _ => ZIO.unit
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Use Scoped Resources">
+    Fork background tasks with `.forkScoped` to ensure proper cleanup:
+    
+    ```scala
+    val ping = sendPings(channel)
+      .repeat(Schedule.fixed(30.seconds))
+      .forkScoped  // Automatically interrupted on disconnect
+    ```
+  </Accordion>
+  
+  <Accordion title="Implement Heartbeats">
+    Use ping/pong frames to detect dead connections:
+    
+    ```scala
+    val heartbeat = channel.send(Read(WebSocketFrame.ping))
+      .repeat(Schedule.fixed(30.seconds))
+      .forkScoped
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle Backpressure">
+    Use bounded queues to handle slow clients:
+    
+    ```scala
+    queue <- Queue.bounded[WebSocketFrame](100)
+    
+    ZStream.fromQueue(queue)
+      .foreach(frame => channel.send(Read(frame)))
+      .forkScoped
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/server/configuration">
+    Server configuration options
+  </Card>
+  <Card title="Streaming" icon="water" href="/streaming/overview">
+    Learn about ZIO Streams
+  </Card>
+</CardGroup>

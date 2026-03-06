@@ -1,0 +1,274 @@
+---
+title: REST API Example
+description: Build a complete REST API with CRUD operations, JSON handling, and type-safe endpoints
+---
+
+This example demonstrates how to build a production-ready REST API using ZIO HTTP. You'll learn how to handle different HTTP methods, work with request bodies, use path parameters, and implement type-safe endpoints.
+
+## Complete Example
+
+Here's a complete REST API for managing users:
+
+```scala
+//> using dep "dev.zio::zio-http:3.4.0"
+
+package example
+
+import zio._
+import zio.http._
+import zio.http.codec._
+import zio.http.endpoint._
+import zio.http.endpoint.openapi.{OpenAPIGen, SwaggerUI}
+
+object RestAPIExample extends ZIOAppDefault {
+  // Domain model
+  case class User(id: Int, name: String, email: String)
+  
+  // In-memory storage (use a real database in production)
+  private val users = Ref.make(Map(
+    1 -> User(1, "Alice", "alice@example.com"),
+    2 -> User(2, "Bob", "bob@example.com")
+  ))
+
+  // Endpoint definitions
+  val getUser =
+    Endpoint(Method.GET / "users" / int("userId"))
+      .out[User]
+
+  val getUserRoute =
+    getUser.implement { userId =>
+      for {
+        usersMap <- users
+        user <- ZIO.fromOption(usersMap.get(userId))
+          .orElseFail(new RuntimeException(s"User $userId not found"))
+      } yield user
+    }
+
+  val getUserPosts =
+    Endpoint(Method.GET / "users" / int("userId") / "posts" / int("postId"))
+      .query(HttpCodec.query[String]("name"))
+      .out[List[String]]
+
+  val getUserPostsRoute =
+    getUserPosts.implement { case (userId: Int, postId: Int, query: String) =>
+      ZIO.succeed(List(s"Post $postId by user $userId with filter: $query"))
+    }
+
+  // Generate OpenAPI documentation
+  val openAPI = OpenAPIGen.fromEndpoints(
+    title = "User API",
+    version = "1.0",
+    getUser,
+    getUserPosts
+  )
+
+  // Combine all routes with Swagger UI
+  val routes = Routes(getUserRoute, getUserPostsRoute) ++ 
+    SwaggerUI.routes("docs" / "openapi", openAPI)
+
+  override val run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## What This Example Demonstrates
+
+This example showcases several important REST API patterns:
+
+- **Type-Safe Endpoints**: Using ZIO HTTP's endpoint API for compile-time safety
+- **Path Parameters**: Extracting typed values from URL paths
+- **Query Parameters**: Handling URL query strings
+- **Error Handling**: Gracefully handling missing resources
+- **OpenAPI/Swagger**: Automatic API documentation generation
+- **State Management**: Using `Ref` for managing in-memory state
+
+## Step-by-Step Walkthrough
+
+<Steps>
+
+### Define Your Domain Model
+
+Start by defining the data structures your API will work with:
+
+```scala
+case class User(id: Int, name: String, email: String)
+```
+
+Case classes automatically get JSON serialization support in ZIO HTTP.
+
+### Create In-Memory Storage
+
+For this example, we'll use a `Ref` to store data in memory:
+
+```scala
+private val users = Ref.make(Map(
+  1 -> User(1, "Alice", "alice@example.com"),
+  2 -> User(2, "Bob", "bob@example.com")
+))
+```
+
+In production, replace this with a real database connection.
+
+### Define Type-Safe Endpoints
+
+Create endpoint definitions with typed path parameters:
+
+```scala
+val getUser =
+  Endpoint(Method.GET / "users" / int("userId"))
+    .out[User]
+```
+
+The `int("userId")` codec automatically:
+- Extracts the path parameter
+- Validates it's a valid integer
+- Converts it to an `Int` type
+- Returns a 400 Bad Request if validation fails
+
+### Implement Endpoint Logic
+
+Implement the business logic for each endpoint:
+
+```scala
+val getUserRoute =
+  getUser.implement { userId =>
+    for {
+      usersMap <- users
+      user <- ZIO.fromOption(usersMap.get(userId))
+        .orElseFail(new RuntimeException(s"User $userId not found"))
+    } yield user
+  }
+```
+
+This implementation:
+- Retrieves the current state from the `Ref`
+- Looks up the user by ID
+- Returns a 404 if not found (handled by the endpoint framework)
+
+### Add Query Parameters
+
+Endpoints can also extract query parameters:
+
+```scala
+val getUserPosts =
+  Endpoint(Method.GET / "users" / int("userId") / "posts" / int("postId"))
+    .query(HttpCodec.query[String]("name"))
+    .out[List[String]]
+```
+
+This endpoint matches URLs like `/users/1/posts/42?name=scala`
+
+### Generate API Documentation
+
+Automatically generate OpenAPI/Swagger documentation:
+
+```scala
+val openAPI = OpenAPIGen.fromEndpoints(
+  title = "User API",
+  version = "1.0",
+  getUser,
+  getUserPosts
+)
+
+val routes = Routes(getUserRoute, getUserPostsRoute) ++ 
+  SwaggerUI.routes("docs" / "openapi", openAPI)
+```
+
+This adds interactive API documentation at `/docs/openapi`.
+
+</Steps>
+
+## How to Run
+
+Save the code to a file and run it:
+
+```bash
+scala-cli run RestAPIExample.scala
+```
+
+The server will start on port 8080.
+
+## Test the API
+
+Test the endpoints with curl:
+
+```bash
+# Get a user by ID
+curl http://localhost:8080/users/1
+# Output: {"id":1,"name":"Alice","email":"alice@example.com"}
+
+# Try a non-existent user (404)
+curl -i http://localhost:8080/users/999
+# Output: HTTP/1.1 404 Not Found
+
+# Get user posts with query parameter
+curl http://localhost:8080/users/1/posts/42?name=scala
+# Output: ["Post 42 by user 1 with filter: scala"]
+
+# View API documentation
+open http://localhost:8080/docs/openapi
+```
+
+## Expected Output
+
+When you start the server:
+
+```
+Started server on port: 8080
+```
+
+Successful requests return JSON:
+
+```json
+{
+  "id": 1,
+  "name": "Alice",
+  "email": "alice@example.com"
+}
+```
+
+Invalid requests return appropriate error codes:
+- `400 Bad Request` - Invalid path parameter (e.g., `/users/abc`)
+- `404 Not Found` - User doesn't exist
+- `405 Method Not Allowed` - Wrong HTTP method
+
+## Advanced: Simple Routes Pattern
+
+For simpler APIs without OpenAPI generation, you can use the basic routing pattern:
+
+```scala
+val simpleRoutes = Routes(
+  // GET /users/:id
+  Method.GET / "users" / int("userId") -> handler { (userId: Int, _: Request) =>
+    users.get.flatMap { usersMap =>
+      ZIO.fromOption(usersMap.get(userId))
+        .map(user => Response.json(user.toString))
+        .orElse(ZIO.succeed(Response.notFound))
+    }
+  },
+  
+  // POST /users
+  Method.POST / "users" -> handler { (req: Request) =>
+    for {
+      body <- req.body.asString
+      // Parse and create user
+      _ <- ZIO.succeed(println(s"Creating user: $body"))
+    } yield Response.ok
+  }
+)
+```
+
+## Key Takeaways
+
+- **Type Safety**: Path and query parameters are type-checked at compile time
+- **Automatic Validation**: Invalid inputs return appropriate HTTP error codes
+- **Composable**: Endpoints can be easily combined and reused
+- **Documentation**: OpenAPI/Swagger docs are generated automatically from endpoint definitions
+- **Error Handling**: Failed effects are automatically converted to error responses
+- **JSON Serialization**: Case classes are automatically serialized to/from JSON
+
+## Next Steps
+
+- [Authentication](/examples/authentication) - Add authentication and authorization
+- [WebSocket Chat](/examples/websocket-chat) - Build real-time applications
+- [Middleware](/docs/middleware) - Add logging, CORS, and rate limiting
+- [Request Bodies](/docs/request) - Learn about JSON decoding and validation

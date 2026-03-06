@@ -1,0 +1,208 @@
+---
+title: Server Overview
+description: Learn how to create and configure ZIO HTTP servers
+---
+
+ZIO HTTP provides a powerful, purely functional server implementation built on top of ZIO. The `Server` trait enables you to serve HTTP applications with zero or more routes.
+
+## Creating a Server
+
+### Using Server.default
+
+The simplest way to create a server is using `Server.default`, which creates a server with default configuration listening on port 8080:
+
+```scala
+import zio._
+import zio.http._
+
+object SimpleServer extends ZIOAppDefault {
+  val routes = Routes(
+    Method.GET / "hello" -> handler(Response.text("Hello, World!"))
+  )
+
+  def run = Server.serve(routes).provide(Server.default)
+}
+```
+
+### Custom Port Configuration
+
+To specify a custom port, use `Server.defaultWithPort`:
+
+```scala
+val app = Server.serve(routes).provide(
+  Server.defaultWithPort(9000)
+)
+```
+
+Or customize the configuration further with `Server.defaultWith`:
+
+```scala
+val app = Server.serve(routes).provide(
+  Server.defaultWith(_.port(9000).keepAlive(true))
+)
+```
+
+## Starting and Stopping
+
+### Server.serve
+
+The primary method for starting a server is `Server.serve`, which installs routes and runs forever:
+
+```scala
+def serve[R](
+  routes: Routes[R, Response]
+)(implicit trace: Trace, tag: EnvironmentTag[R]): URIO[R with Server, Nothing]
+```
+
+**Example:**
+
+```scala
+val routes = Routes(
+  Method.GET / "users" -> handler(Response.json("""[{"id": 1}]""")),
+  Method.POST / "users" -> handler(Response.status(Status.Created))
+)
+
+// Server will run indefinitely
+val app = Server.serve(routes).provide(Server.default)
+```
+
+### Server.install
+
+For more control, use `Server.install` to install routes and get the port back:
+
+```scala
+val program = for {
+  port <- Server.install(routes)
+  _    <- Console.printLine(s"Server started on port $port")
+  _    <- ZIO.never
+} yield ()
+
+program.provide(Server.default)
+```
+
+### Multiple Route Sets
+
+You can install multiple route sets on the same server instance:
+
+```scala
+val apiRoutes = Routes(
+  Method.GET / "api" / "status" -> handler(Response.ok)
+)
+
+val adminRoutes = Routes(
+  Method.GET / "admin" / "health" -> handler(Response.ok)
+)
+
+val program = for {
+  server <- ZIO.service[Server]
+  _      <- server.install(apiRoutes)
+  _      <- server.install(adminRoutes)
+  _      <- ZIO.never
+} yield ()
+```
+
+## Server Lifecycle
+
+The server is managed as a ZIO `ZLayer`, providing automatic resource management:
+
+```scala
+val serverLayer: ZLayer[Any, Throwable, Server] = Server.default
+
+val app = ZIO.scoped {
+  Server.serve(routes)
+}.provide(serverLayer)
+```
+
+When the scope closes, the server performs graceful shutdown:
+- Stops accepting new connections
+- Waits for in-flight requests to complete (up to `gracefulShutdownTimeout`)
+- Releases resources
+
+## Getting Server Port
+
+The server exposes its actual port (useful when binding to port 0 for dynamic allocation):
+
+```scala
+val program = for {
+  server <- ZIO.service[Server]
+  port   <- server.port
+  _      <- Console.printLine(s"Server listening on port: $port")
+} yield ()
+```
+
+## Configuration from File
+
+Load server configuration from application.conf or environment variables:
+
+```scala
+val configuredServer = Server.configured()
+
+val app = Server.serve(routes).provide(configuredServer)
+```
+
+Default configuration path is `zio.http.server`, or specify a custom path:
+
+```scala
+val customConfigPath = Server.configured(
+  NonEmptyChunk("myapp", "server")
+)
+```
+
+**Example application.conf:**
+
+```hocon
+zio.http.server {
+  binding-port = 9000
+  binding-host = "0.0.0.0"
+  keep-alive = true
+  max-header-size = 16384
+}
+```
+
+## Layers and Dependencies
+
+Servers can depend on other ZIO services:
+
+```scala
+trait UserService {
+  def getUsers: UIO[List[User]]
+}
+
+val routes = Routes(
+  Method.GET / "users" -> handler { (req: Request) =>
+    ZIO.serviceWithZIO[UserService](_.getUsers).map { users =>
+      Response.json(users.toJson)
+    }
+  }
+)
+
+val app = Server.serve(routes).provide(
+  Server.default,
+  UserServiceLive.layer
+)
+```
+
+## Platform-Specific Behavior
+
+ZIO HTTP provides platform-specific implementations:
+- **JVM**: Uses Netty for high-performance networking
+- **JS**: Uses Fetch API for browser/Node.js environments
+
+The `Server` trait abstracts these differences, providing a unified API.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/server/configuration">
+    Learn about server configuration options
+  </Card>
+  <Card title="SSL/TLS" icon="lock" href="/server/ssl-tls">
+    Secure your server with HTTPS
+  </Card>
+  <Card title="WebSockets" icon="plug" href="/server/websockets">
+    Add real-time bidirectional communication
+  </Card>
+  <Card title="Routes" icon="route" href="/routes/overview">
+    Define HTTP routes and handlers
+  </Card>
+</CardGroup>

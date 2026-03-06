@@ -1,0 +1,396 @@
+---
+title: Routes
+description: API reference for zio.http.Routes
+---
+
+`Routes` is a collection of routes that forms an HTTP application. All errors must be handled through conversion into HTTP responses before routes can be executed.
+
+## Type Signature
+
+```scala
+final case class Routes[-Env, +Err](routes: Chunk[zio.http.Route[Env, Err]])
+```
+
+<ParamField path="Env" type="type parameter">
+  The environment type required by the routes
+</ParamField>
+
+<ParamField path="Err" type="type parameter">
+  The error type that can be produced by the routes
+</ParamField>
+
+<ParamField path="routes" type="Chunk[Route[Env, Err]]">
+  The collection of individual routes that make up this application
+</ParamField>
+
+## Creating Routes
+
+### Routes.empty
+
+```scala
+val empty: Routes[Any, Nothing]
+```
+
+An HTTP application that does not handle any routes.
+
+### Routes.apply
+
+```scala
+def apply[Env, Err](route: Route[Env, Err], routes: Route[Env, Err]*): Routes[Env, Err]
+```
+
+Creates routes from one or more individual route instances.
+
+<ParamField path="route" type="Route[Env, Err]">
+  The first route (required)
+</ParamField>
+
+<ParamField path="routes" type="Route[Env, Err]*">
+  Additional routes (varargs)
+</ParamField>
+
+<ResponseField name="return" type="Routes[Env, Err]">
+  A new Routes instance containing the provided routes
+</ResponseField>
+
+### Routes.fromIterable
+
+```scala
+def fromIterable[Env, Err](routes: Iterable[Route[Env, Err]]): Routes[Env, Err]
+```
+
+<ParamField path="routes" type="Iterable[Route[Env, Err]]">
+  An iterable collection of routes
+</ParamField>
+
+### Routes.singleton
+
+```scala
+def singleton[Env, Err](h: Handler[Env, Err, (Path, Request), Response])(implicit trace: Trace): Routes[Env, Err]
+```
+
+Creates routes from a single handler that accepts both path and request.
+
+### Static File Serving
+
+#### Routes.serveDirectory
+
+```scala
+def serveDirectory(path: Path, docRoot: File)(implicit trace: Trace): Routes[Any, Nothing]
+```
+
+Creates routes for serving static files from a local directory.
+
+<ParamField path="path" type="Path">
+  The URL path prefix where files will be served
+</ParamField>
+
+<ParamField path="docRoot" type="File">
+  The local directory containing the files to serve
+</ParamField>
+
+**Example:**
+
+```scala
+Routes.serveDirectory(Path.empty / "assets", new File("/var/www/static"))
+// Request to /assets/images/logo.png serves /var/www/static/images/logo.png
+```
+
+#### Routes.serveResources
+
+```scala
+def serveResources(path: Path, resourcePrefix: String = "public")(implicit trace: Trace): Routes[Any, Nothing]
+```
+
+Creates routes for serving static files from the classpath resources.
+
+<ParamField path="path" type="Path">
+  The URL path prefix where resources will be served
+</ParamField>
+
+<ParamField path="resourcePrefix" type="String" default="public">
+  The resource directory prefix in src/main/resources
+</ParamField>
+
+## Combining Routes
+
+### ++
+
+```scala
+def ++[Env1 <: Env, Err1 >: Err](that: Routes[Env1, Err1]): Routes[Env1, Err1]
+```
+
+Combines two Routes. In case of conflicts, routes from `that` take precedence.
+
+<ParamField path="that" type="Routes[Env1, Err1]">
+  The routes to append
+</ParamField>
+
+### +: and :+
+
+```scala
+def +:[Env1 <: Env, Err1 >: Err](route: Route[Env1, Err1]): Routes[Env1, Err1]
+def :+[Env1 <: Env, Err1 >: Err](route: Route[Env1, Err1]): Routes[Env1, Err1]
+```
+
+Prepend or append a single route to the routes collection.
+
+## Error Handling
+
+### handleError
+
+```scala
+def handleError(f: Err => Response)(implicit trace: Trace): Routes[Env, Nothing]
+```
+
+Handles all typed errors by converting them into responses.
+
+<ParamField path="f" type="Err => Response">
+  Function to convert errors into HTTP responses
+</ParamField>
+
+### handleErrorZIO
+
+```scala
+def handleErrorZIO[Env1 <: Env](f: Err => ZIO[Env1, Nothing, Response])(implicit trace: Trace): Routes[Env1, Nothing]
+```
+
+Handles errors effectfully, producing responses via ZIO.
+
+### handleErrorCause
+
+```scala
+def handleErrorCause(f: Cause[Err] => Response)(implicit trace: Trace): Routes[Env, Nothing]
+```
+
+Handles both typed errors and non-recoverable errors (defects) by converting the full cause into a response.
+
+### handleErrorCauseZIO
+
+```scala
+def handleErrorCauseZIO(f: Cause[Err] => ZIO[Any, Nothing, Response])(implicit trace: Trace): Routes[Env, Nothing]
+```
+
+Effectful version that handles all errors and defects.
+
+### handleErrorRequest
+
+```scala
+def handleErrorRequest(f: (Err, Request) => Response)(implicit trace: Trace): Routes[Env, Nothing]
+```
+
+Handles errors with access to the request that caused the error.
+
+<ParamField path="f" type="(Err, Request) => Response">
+  Function receiving both the error and the originating request
+</ParamField>
+
+### handleErrorRequestCause
+
+```scala
+def handleErrorRequestCause(f: (Request, Cause[Err]) => Response)(implicit trace: Trace): Routes[Env, Nothing]
+```
+
+Handles error causes with access to the originating request.
+
+### sandbox
+
+```scala
+def sandbox(implicit trace: Trace): Routes[Env, Nothing]
+```
+
+Automatically translates all failures into responses using best-effort heuristics for HTTP status codes.
+
+## Transformation
+
+### @@
+
+```scala
+def @@[Env1 <: Env](aspect: Middleware[Env1]): Routes[Env1, Err]
+def @@[Env0](aspect: HandlerAspect[Env0, Unit]): Routes[Env with Env0, Err]
+```
+
+Applies middleware or aspects to all routes.
+
+**Example:**
+
+```scala
+routes @@ Middleware.timeout(30.seconds)
+```
+
+### transform
+
+```scala
+def transform[Env1](f: Handler[Env, Response, Request, Response] => Handler[Env1, Response, Request, Response]): Routes[Env1, Err]
+```
+
+Transforms the handlers of all routes using the provided function.
+
+### nest
+
+```scala
+def nest(prefix: PathCodec[Unit])(implicit trace: Trace): Routes[Env, Err]
+```
+
+Nests all routes under a path prefix.
+
+**Example:**
+
+```scala
+routes.nest(Root / "api" / "v1")
+```
+
+### timeout
+
+```scala
+def timeout(duration: Duration)(implicit trace: Trace): Routes[Env, Err]
+```
+
+Adds a timeout to all route handlers.
+
+## Execution
+
+### apply
+
+```scala
+def apply(request: Request)(implicit ev: Err <:< Response): ZIO[Scope & Env, Response, Response]
+```
+
+Executes the routes with the specified request.
+
+<ParamField path="request" type="Request">
+  The incoming HTTP request
+</ParamField>
+
+<ResponseField name="return" type="ZIO[Scope & Env, Response, Response]">
+  Effect that produces a response or fails with a response
+</ResponseField>
+
+### run
+
+```scala
+def run(request: Request)(implicit trace: Trace): ZIO[Scope & Env, Either[Err, Response], Response]
+
+def run(
+  method: Method = Method.GET,
+  path: Path = Path.root,
+  headers: Headers = Headers.empty,
+  body: Body = Body.empty,
+)(implicit ev: Err <:< Response): ZIO[Scope & Env, Nothing, Response]
+```
+
+Executes routes with either a full request or individual components.
+
+### runZIO
+
+```scala
+def runZIO(request: Request)(implicit ev: Err <:< Response): ZIO[Scope & Env, Nothing, Response]
+```
+
+Alias for `apply`. Executes the routes, returning a response.
+
+### isDefinedAt
+
+```scala
+def isDefinedAt(request: Request)(implicit ev: Err <:< Response): Boolean
+```
+
+Checks if routes can handle the request's method and path.
+
+## Conversion
+
+### toHandler
+
+```scala
+def toHandler(implicit ev: Err <:< Response): Handler[Env, Nothing, Request, Response]
+```
+
+Converts routes into a request handler.
+
+<ResponseField name="return" type="Handler[Env, Nothing, Request, Response]">
+  A handler that processes requests and produces responses
+</ResponseField>
+
+## Dependency Injection
+
+### provideEnvironment
+
+```scala
+def provideEnvironment(env: ZEnvironment[Env]): Routes[Any, Err]
+```
+
+Provides the environment to routes, eliminating environmental requirements.
+
+<ParamField path="env" type="ZEnvironment[Env]">
+  The environment to provide
+</ParamField>
+
+### provide
+
+```scala
+def provide[Env1 <: Env](env: Env1)(implicit tag: Tag[Env1]): Routes[Any, Err]
+```
+
+Provides a single environment service to the routes.
+
+## Server Integration
+
+### serve
+
+```scala
+def serve[Env1 <: Env](implicit
+  ev: Err <:< Response,
+  trace: Trace,
+  tag: EnvironmentTag[Env1],
+): URIO[Env1 with Server, Nothing]
+```
+
+Installs routes into a server and runs forever.
+
+<ResponseField name="return" type="URIO[Env1 with Server, Nothing]">
+  Effect that installs routes and serves requests indefinitely
+</ResponseField>
+
+**Example:**
+
+```scala
+val app = Routes(
+  Method.GET / "hello" -> handler(Response.text("Hello World"))
+)
+
+app.serve // Requires Server in environment
+```
+
+## Error Transformation
+
+### mapError
+
+```scala
+def mapError[Err1](fxn: Err => Err1): Routes[Env, Err1]
+```
+
+Transforms the error type.
+
+### mapErrorZIO
+
+```scala
+def mapErrorZIO[Err1](fxn: Err => ZIO[Any, Err1, Response])(implicit trace: Trace): Routes[Env, Err1]
+```
+
+Effectfully transforms the error type.
+
+### tapErrorZIO
+
+```scala
+def tapErrorZIO[Err1 >: Err](f: Err => ZIO[Any, Err1, Any])(implicit trace: Trace): Routes[Env, Err1]
+```
+
+Effectfully peeks at unhandled failures without changing the result.
+
+### tapErrorCauseZIO
+
+```scala
+def tapErrorCauseZIO[Err1 >: Err](f: Cause[Err] => ZIO[Any, Err1, Any])(implicit trace: Trace): Routes[Env, Err1]
+```
+
+Effectfully peeks at the full error cause.

@@ -1,0 +1,472 @@
+---
+title: Method
+description: API reference for the Method type in ZIO HTTP
+---
+
+## Overview
+
+`Method` represents an HTTP method (also known as HTTP verb) such as GET, POST, PUT, DELETE, etc. It is used to indicate the desired action to be performed on a resource.
+
+```scala
+sealed trait Method { self: Product =>
+  val name: String
+}
+```
+
+## Standard HTTP Methods
+
+ZIO HTTP provides case objects for all standard HTTP methods:
+
+```scala
+case object GET     extends Method { val name = "GET"     }
+case object POST    extends Method { val name = "POST"    }
+case object PUT     extends Method { val name = "PUT"     }
+case object DELETE  extends Method { val name = "DELETE"  }
+case object PATCH   extends Method { val name = "PATCH"   }
+case object HEAD    extends Method { val name = "HEAD"    }
+case object OPTIONS extends Method { val name = "OPTIONS" }
+case object TRACE   extends Method { val name = "TRACE"   }
+case object CONNECT extends Method { val name = "CONNECT" }
+```
+
+### GET
+
+Requests a representation of a resource. Should only retrieve data.
+
+```scala
+val method = Method.GET
+```
+
+### POST
+
+Submits data to be processed to a specified resource.
+
+```scala
+val method = Method.POST
+```
+
+### PUT
+
+Replaces all current representations of the target resource.
+
+```scala
+val method = Method.PUT
+```
+
+### DELETE
+
+Deletes the specified resource.
+
+```scala
+val method = Method.DELETE
+```
+
+### PATCH
+
+Applies partial modifications to a resource.
+
+```scala
+val method = Method.PATCH
+```
+
+### HEAD
+
+Identical to GET but without the response body.
+
+```scala
+val method = Method.HEAD
+```
+
+### OPTIONS
+
+Describes the communication options for the target resource.
+
+```scala
+val method = Method.OPTIONS
+```
+
+### TRACE
+
+Performs a message loop-back test along the path to the target resource.
+
+```scala
+val method = Method.TRACE
+```
+
+### CONNECT
+
+Establishes a tunnel to the server identified by the target resource.
+
+```scala
+val method = Method.CONNECT
+```
+
+## Special Methods
+
+### ANY
+
+A wildcard method that matches any HTTP method.
+
+```scala
+case object ANY extends Method { val name = "GET" }
+```
+
+```scala
+val method = Method.ANY
+// Used in routing to match any method
+```
+
+### CUSTOM
+
+Represents a custom or non-standard HTTP method.
+
+```scala
+final case class CUSTOM(name: String) extends Method
+```
+
+<ParamField path="name" type="String" required>
+  The name of the custom HTTP method
+</ParamField>
+
+```scala
+// WebDAV methods
+val propfind = Method.CUSTOM("PROPFIND")
+val proppatch = Method.CUSTOM("PROPPATCH")
+
+// Custom application methods
+val customMethod = Method.CUSTOM("MYMETHOD")
+```
+
+## Core Methods
+
+### name
+
+```scala
+val name: String
+```
+
+<ResponseField name="name" type="String">
+  The name of the HTTP method as it appears in HTTP requests
+</ResponseField>
+
+```scala
+Method.GET.name     // "GET"
+Method.POST.name    // "POST"
+Method.CUSTOM("PROPFIND").name  // "PROPFIND"
+```
+
+### render
+
+```scala
+def render: String
+```
+
+<ResponseField name="result" type="String">
+  Renders the method as a string. Returns "*" for `Method.ANY`, otherwise returns the method name.
+</ResponseField>
+
+```scala
+Method.GET.render      // "GET"
+Method.ANY.render      // "*"
+Method.POST.render     // "POST"
+```
+
+### toString
+
+```scala
+override def toString: String
+```
+
+Same as `render`.
+
+```scala
+Method.GET.toString    // "GET"
+Method.ANY.toString    // "*"
+```
+
+## Combining Methods
+
+### ++
+
+```scala
+def ++(that: Method): Method
+```
+
+<ParamField path="that" type="Method" required>
+  The method to combine with
+</ParamField>
+
+<ResponseField name="result" type="Method">
+  Right-biased combination. If `that` is `Method.ANY`, returns `self`, otherwise returns `that`.
+</ResponseField>
+
+```scala
+val method1 = Method.GET
+val method2 = Method.POST
+val combined = method1 ++ method2  // Method.POST
+
+val withAny = Method.POST ++ Method.ANY  // Method.POST
+val anyWith = Method.ANY ++ Method.GET   // Method.GET
+```
+
+## Route Pattern Creation
+
+### /
+
+```scala
+def /[A](that: PathCodec[A]): RoutePattern[A]
+```
+
+<ParamField path="that" type="PathCodec[A]" required>
+  Path codec to combine with the method
+</ParamField>
+
+<ResponseField name="result" type="RoutePattern[A]">
+  Creates a `RoutePattern` combining the method with a path
+</ResponseField>
+
+```scala
+import zio.http._
+import zio.http.codec._
+
+// Simple path
+val pattern1 = Method.GET / "users"
+
+// Path with parameters
+val pattern2 = Method.GET / "users" / int("userId")
+
+// Multiple segments
+val pattern3 = Method.POST / "api" / "v1" / "users"
+```
+
+## Method Matching
+
+### matches
+
+```scala
+def matches(that: Method): Boolean
+```
+
+<ParamField path="that" type="Method" required>
+  Method to match against
+</ParamField>
+
+<ResponseField name="result" type="Boolean">
+  Returns `true` if methods match. `Method.ANY` matches any method.
+</ResponseField>
+
+```scala
+Method.GET.matches(Method.GET)      // true
+Method.GET.matches(Method.POST)     // false
+Method.ANY.matches(Method.GET)      // true
+Method.GET.matches(Method.ANY)      // true
+Method.POST.matches(Method.ANY)     // true
+```
+
+## Creating from String
+
+```scala
+def fromString(method: String): Method
+```
+
+<ParamField path="method" type="String" required>
+  String representation of the HTTP method
+</ParamField>
+
+<ResponseField name="result" type="Method">
+  Returns the corresponding standard method or `Method.CUSTOM` for non-standard methods. Case-insensitive.
+</ResponseField>
+
+```scala
+val get = Method.fromString("GET")           // Method.GET
+val post = Method.fromString("post")         // Method.POST (case-insensitive)
+val custom = Method.fromString("PROPFIND")   // Method.CUSTOM("PROPFIND")
+```
+
+## Standard Methods Set
+
+```scala
+private[http] val standardMethods: Set[Method]
+```
+
+Internal set containing all standard HTTP methods:
+
+```scala
+Set(OPTIONS, GET, HEAD, POST, PUT, PATCH, DELETE, TRACE, CONNECT)
+```
+
+## Type Signature
+
+```scala
+package zio.http
+
+import zio.http.codec.PathCodec
+
+sealed trait Method { self: Product =>
+  val name: String
+  
+  def ++(that: Method): Method
+  def /[A](that: PathCodec[A]): RoutePattern[A]
+  def matches(that: Method): Boolean
+  def render: String
+  override def toString: String
+}
+
+object Method {
+  case object OPTIONS extends Method { val name = "OPTIONS" }
+  case object GET     extends Method { val name = "GET"     }
+  case object HEAD    extends Method { val name = "HEAD"    }
+  case object POST    extends Method { val name = "POST"    }
+  case object PUT     extends Method { val name = "PUT"     }
+  case object PATCH   extends Method { val name = "PATCH"   }
+  case object DELETE  extends Method { val name = "DELETE"  }
+  case object TRACE   extends Method { val name = "TRACE"   }
+  case object CONNECT extends Method { val name = "CONNECT" }
+  case object ANY     extends Method { val name = "GET"     }
+  
+  final case class CUSTOM(name: String) extends Method
+  
+  def fromString(method: String): Method
+  
+  private[http] val standardMethods: Set[Method]
+}
+```
+
+## Examples
+
+### Basic Routing
+
+```scala
+import zio.http._
+
+val routes = Routes(
+  Method.GET / "users" -> 
+    handler(Response.text("List of users")),
+    
+  Method.POST / "users" -> 
+    handler(Response.text("Create user")),
+    
+  Method.GET / "users" / int("id") -> 
+    handler { (id: Int, req: Request) =>
+      Response.text(s"Get user $id")
+    },
+    
+  Method.DELETE / "users" / int("id") -> 
+    handler { (id: Int, req: Request) =>
+      Response.text(s"Delete user $id")
+    }
+)
+```
+
+### Matching Any Method
+
+```scala
+import zio.http._
+
+val catchAll = Routes(
+  Method.ANY / "echo" -> handler { (req: Request) =>
+    Response.text(s"Received ${req.method.name} request")
+  }
+)
+```
+
+### Method-Based Logic
+
+```scala
+import zio.http._
+
+val handler = Handler.fromFunction[Request] { request =>
+  request.method match {
+    case Method.GET =>
+      Response.text("Reading data")
+    case Method.POST | Method.PUT =>
+      Response.text("Writing data")
+    case Method.DELETE =>
+      Response.text("Deleting data")
+    case _ =>
+      Response.status(Status.MethodNotAllowed)
+  }
+}
+```
+
+### CORS Handling
+
+```scala
+import zio.http._
+
+val corsHandler = Handler.fromFunction[Request] { request =>
+  if (request.method == Method.OPTIONS) {
+    Response(
+      status = Status.NoContent,
+      headers = Headers(
+        Header.AccessControlAllowOrigin("*"),
+        Header.AccessControlAllowMethods(
+          Method.GET, Method.POST, Method.PUT, Method.DELETE
+        ),
+        Header.AccessControlAllowHeaders("Content-Type", "Authorization")
+      )
+    )
+  } else {
+    // Handle actual request
+    Response.ok
+  }
+}
+```
+
+### Custom Methods (WebDAV)
+
+```scala
+import zio.http._
+
+val webdavRoutes = Routes(
+  Method.CUSTOM("PROPFIND") / "files" -> 
+    handler(Response.text("List properties")),
+    
+  Method.CUSTOM("PROPPATCH") / "files" / string("name") -> 
+    handler { (name: String, req: Request) =>
+      Response.text(s"Update properties for $name")
+    },
+    
+  Method.CUSTOM("MKCOL") / "files" / string("name") -> 
+    handler { (name: String, req: Request) =>
+      Response.text(s"Create collection $name")
+    }
+)
+```
+
+### Method Validation
+
+```scala
+import zio.http._
+
+val allowedMethods = Set(Method.GET, Method.POST, Method.PUT)
+
+val validatingHandler = Handler.fromFunction[Request] { request =>
+  if (allowedMethods.contains(request.method)) {
+    Response.text(s"Processing ${request.method.name}")
+  } else {
+    Response(
+      status = Status.MethodNotAllowed,
+      headers = Headers(
+        Header.Allow(allowedMethods.toSeq: _*)
+      )
+    )
+  }
+}
+```
+
+### Pattern Matching
+
+```scala
+import zio.http._
+
+def handleRequest(method: Method, path: String): String = {
+  (method, path) match {
+    case (Method.GET, "/users")    => "List users"
+    case (Method.POST, "/users")   => "Create user"
+    case (Method.GET, _)           => "GET request"
+    case (Method.POST, _)          => "POST request"
+    case _                         => "Other request"
+  }
+}
+```

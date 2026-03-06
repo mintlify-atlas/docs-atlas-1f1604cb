@@ -1,0 +1,446 @@
+---
+title: Status
+description: API reference for the Status type in ZIO HTTP
+---
+
+## Overview
+
+`Status` represents an HTTP status code along with its category and reason phrase. It provides type-safe access to standard HTTP status codes and supports custom status codes.
+
+```scala
+sealed trait Status extends Product with Serializable
+```
+
+## Status Categories
+
+Status codes are organized into sealed trait hierarchies:
+
+```scala
+sealed trait Informational extends Status  // 100 – 199
+sealed trait Success       extends Status  // 200 – 299
+sealed trait Redirection   extends Status  // 300 – 399
+sealed trait Error         extends Status  // 400 – 599
+sealed trait ClientError   extends Error   // 400 – 499
+sealed trait ServerError   extends Error   // 500 – 599
+```
+
+## Core Properties
+
+### Status Code
+
+```scala
+val code: Int
+```
+
+<ResponseField name="code" type="Int">
+  The numeric HTTP status code
+</ResponseField>
+
+```scala
+val status = Status.Ok
+status.code // 200
+
+val notFound = Status.NotFound
+notFound.code // 404
+```
+
+### Reason Phrase
+
+```scala
+val reasonPhrase: String
+```
+
+<ResponseField name="reasonPhrase" type="String">
+  Human-readable description derived from the case object name
+</ResponseField>
+
+```scala
+Status.Ok.reasonPhrase // "Ok"
+Status.NotFound.reasonPhrase // "Not Found"
+Status.InternalServerError.reasonPhrase // "Internal Server Error"
+```
+
+### Text Representation
+
+```scala
+lazy val text: String
+```
+
+<ResponseField name="text" type="String">
+  String representation of the status code
+</ResponseField>
+
+```scala
+Status.Ok.text // "200"
+Status.NotFound.text // "404"
+```
+
+## Category Checks
+
+```scala
+def isInformational: Boolean  // 100-199
+def isSuccess: Boolean         // 200-299
+def isRedirection: Boolean     // 300-399
+def isClientError: Boolean     // 400-499
+def isServerError: Boolean     // 500-599
+def isError: Boolean           // 400-599 (client or server error)
+```
+
+```scala
+val status = Status.Ok
+status.isSuccess // true
+status.isError // false
+
+val notFound = Status.NotFound
+notFound.isClientError // true
+notFound.isError // true
+
+val serverError = Status.InternalServerError
+serverError.isServerError // true
+serverError.isError // true
+```
+
+## Standard Status Codes
+
+### Informational (1xx)
+
+```scala
+Status.Continue                 // 100
+Status.SwitchingProtocols       // 101
+Status.Processing               // 102
+```
+
+### Success (2xx)
+
+```scala
+Status.Ok                              // 200
+Status.Created                         // 201
+Status.Accepted                        // 202
+Status.NonAuthoritativeInformation     // 203
+Status.NoContent                       // 204
+Status.ResetContent                    // 205
+Status.PartialContent                  // 206
+Status.MultiStatus                     // 207
+```
+
+### Redirection (3xx)
+
+```scala
+Status.MultipleChoices          // 300
+Status.MovedPermanently         // 301
+Status.Found                    // 302
+Status.SeeOther                 // 303
+Status.NotModified              // 304
+Status.UseProxy                 // 305
+Status.TemporaryRedirect        // 307
+Status.PermanentRedirect        // 308
+```
+
+### Client Error (4xx)
+
+```scala
+Status.BadRequest                      // 400
+Status.Unauthorized                    // 401
+Status.PaymentRequired                 // 402
+Status.Forbidden                       // 403
+Status.NotFound                        // 404
+Status.MethodNotAllowed                // 405
+Status.NotAcceptable                   // 406
+Status.ProxyAuthenticationRequired     // 407
+Status.RequestTimeout                  // 408
+Status.Conflict                        // 409
+Status.Gone                            // 410
+Status.LengthRequired                  // 411
+Status.PreconditionFailed              // 412
+Status.RequestEntityTooLarge           // 413
+Status.RequestUriTooLong               // 414
+Status.UnsupportedMediaType            // 415
+Status.RequestedRangeNotSatisfiable    // 416
+Status.ExpectationFailed               // 417
+Status.MisdirectedRequest              // 421
+Status.UnprocessableEntity             // 422
+Status.Locked                          // 423
+Status.FailedDependency                // 424
+Status.UnorderedCollection             // 425
+Status.UpgradeRequired                 // 426
+Status.PreconditionRequired            // 428
+Status.TooManyRequests                 // 429
+Status.RequestHeaderFieldsTooLarge     // 431
+```
+
+### Server Error (5xx)
+
+```scala
+Status.InternalServerError             // 500
+Status.NotImplemented                  // 501
+Status.BadGateway                      // 502
+Status.ServiceUnavailable              // 503
+Status.GatewayTimeout                  // 504
+Status.HttpVersionNotSupported         // 505
+Status.VariantAlsoNegotiates           // 506
+Status.InsufficientStorage             // 507
+Status.NotExtended                     // 510
+Status.NetworkAuthenticationRequired   // 511
+```
+
+## Custom Status Codes
+
+```scala
+final case class Custom(override val code: Int, override val reasonPhrase: String = "") extends Status
+```
+
+<ParamField path="code" type="Int" required>
+  The numeric status code
+</ParamField>
+
+<ParamField path="reasonPhrase" type="String" default="">
+  Custom reason phrase
+</ParamField>
+
+```scala
+// Custom status code
+val customStatus = Status.Custom(299, "Custom Success")
+customStatus.code // 299
+customStatus.reasonPhrase // "Custom Success"
+
+// Custom status without reason
+val minimal = Status.Custom(450)
+minimal.code // 450
+minimal.reasonPhrase // ""
+```
+
+## Creating Status from Values
+
+### From Int
+
+```scala
+def fromInt(code: Int): Status
+```
+
+<ParamField path="code" type="Int" required>
+  The status code number
+</ParamField>
+
+<ResponseField name="result" type="Status">
+  Returns the corresponding standard status or a `Custom` status if not recognized
+</ResponseField>
+
+```scala
+val status = Status.fromInt(200)  // Status.Ok
+val notFound = Status.fromInt(404) // Status.NotFound
+val custom = Status.fromInt(999)   // Status.Custom(999, "")
+```
+
+### From String
+
+```scala
+def fromString(code: String): Option[Status]
+```
+
+<ParamField path="code" type="String" required>
+  String representation of status code
+</ParamField>
+
+<ResponseField name="result" type="Option[Status]">
+  Returns `Some(status)` if the string is a valid integer, `None` otherwise
+</ResponseField>
+
+```scala
+val status = Status.fromString("200")    // Some(Status.Ok)
+val invalid = Status.fromString("abc")   // None
+val custom = Status.fromString("999")    // Some(Status.Custom(999, ""))
+```
+
+## Conversion Methods
+
+### To Response
+
+```scala
+def toResponse: Response
+```
+
+<ResponseField name="result" type="Response">
+  Creates a `Response` with this status, empty body, and no headers
+</ResponseField>
+
+```scala
+val response = Status.Ok.toResponse
+// Response(status = Status.Ok, body = Body.empty, headers = Headers.empty)
+
+val notFoundResponse = Status.NotFound.toResponse
+```
+
+### To Routes
+
+```scala
+def toRoutes(implicit trace: Trace): Routes[Any, Nothing]
+```
+
+<ResponseField name="result" type="Routes[Any, Nothing]">
+  Creates routes that always respond with this status
+</ResponseField>
+
+```scala
+import zio.http._
+
+val routes = Status.NotImplemented.toRoutes
+// Responds with 501 Not Implemented to all requests
+```
+
+## Type Signature
+
+```scala
+package zio.http
+
+import zio.Trace
+
+sealed trait Status extends Product with Serializable {
+  val code: Int
+  val reasonPhrase: String
+  lazy val text: String
+  
+  def isInformational: Boolean
+  def isSuccess: Boolean
+  def isRedirection: Boolean
+  def isClientError: Boolean
+  def isServerError: Boolean
+  def isError: Boolean
+  
+  def toRoutes(implicit trace: Trace): Routes[Any, Nothing]
+  def toResponse: Response
+}
+
+object Status {
+  sealed trait Informational extends Status
+  sealed trait Success       extends Status
+  sealed trait Redirection   extends Status
+  sealed trait Error         extends Status
+  sealed trait ClientError   extends Error
+  sealed trait ServerError   extends Error
+  
+  final case class Custom(override val code: Int, override val reasonPhrase: String = "") extends Status
+  
+  def fromInt(code: Int): Status
+  def fromString(code: String): Option[Status]
+  
+  // Standard status codes (case objects)
+  case object Ok extends Success { override val code: Int = 200 }
+  case object NotFound extends ClientError { override val code: Int = 404 }
+  // ... (all other standard statuses)
+}
+```
+
+## Examples
+
+### Basic Response Creation
+
+```scala
+import zio.http._
+
+// Simple responses
+val okResponse = Response.status(Status.Ok)
+val notFoundResponse = Response.status(Status.NotFound)
+
+// With body
+val jsonResponse = Response(
+  status = Status.Ok,
+  body = Body.fromString("""{ "message": "Success" }""")
+    .contentType(MediaType.application.json)
+)
+```
+
+### Status-Based Routing
+
+```scala
+import zio.http._
+
+val routes = Routes(
+  Method.GET / "health" -> Handler.ok,
+  Method.GET / "not-implemented" -> Handler.status(Status.NotImplemented)
+)
+```
+
+### Conditional Status
+
+```scala
+import zio.http._
+
+def handleRequest(isValid: Boolean): Response = {
+  val status = if (isValid) Status.Ok else Status.BadRequest
+  Response.status(status)
+}
+
+// Using pattern matching
+def handleResult[A](result: Either[String, A]): Response = result match {
+  case Right(value) => Response(
+    status = Status.Ok,
+    body = Body.fromString(value.toString)
+  )
+  case Left(error) => Response(
+    status = Status.BadRequest,
+    body = Body.fromString(error)
+  )
+}
+```
+
+### Error Handling
+
+```scala
+import zio.http._
+
+val handler = Handler.fromFunctionZIO[Request] { request =>
+  processRequest(request)
+    .map(result => Response(
+      status = Status.Ok,
+      body = Body.fromString(result)
+    ))
+    .catchAll {
+      case _: IllegalArgumentException => 
+        ZIO.succeed(Response.status(Status.BadRequest))
+      case _: NoSuchElementException =>
+        ZIO.succeed(Response.status(Status.NotFound))
+      case _ =>
+        ZIO.succeed(Response.status(Status.InternalServerError))
+    }
+}
+```
+
+### Status Code Inspection
+
+```scala
+import zio.http._
+
+def logResponse(response: Response): Unit = {
+  val status = response.status
+  
+  if (status.isSuccess) {
+    println(s"Success: ${status.code} ${status.reasonPhrase}")
+  } else if (status.isClientError) {
+    println(s"Client error: ${status.code} ${status.reasonPhrase}")
+  } else if (status.isServerError) {
+    println(s"Server error: ${status.code} ${status.reasonPhrase}")
+  }
+}
+
+// Filtering by status
+val responses: List[Response] = ???
+val errors = responses.filter(_.status.isError)
+val successes = responses.filter(_.status.isSuccess)
+```
+
+### Custom Status Codes
+
+```scala
+import zio.http._
+
+// Custom success status
+val customSuccess = Status.Custom(299, "Custom Operation Complete")
+val response1 = Response(
+  status = customSuccess,
+  body = Body.fromString("Operation completed")
+)
+
+// WebDAV status codes
+val multiStatus = Status.Custom(207, "Multi-Status")
+val locked = Status.Custom(423, "Locked")
+```

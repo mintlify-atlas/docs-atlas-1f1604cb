@@ -1,0 +1,109 @@
+---
+title: OpenAPI Documentation
+description: Automatically generate OpenAPI/Swagger documentation from endpoints
+---
+
+ZIO HTTP can automatically generate OpenAPI documentation from your endpoint definitions, providing interactive API documentation for your services.
+
+## Overview
+
+OpenAPI generation provides:
+
+- **Automatic Documentation**: Generate docs from endpoint definitions
+- **Interactive UI**: Swagger UI for testing APIs
+- **Type Information**: Request/response schemas from ZIO Schema
+- **Authentication**: Document security requirements
+
+## Generating OpenAPI Docs
+
+Generate OpenAPI documentation from endpoints:
+
+```scala
+import zio.http._
+import zio.http.endpoint._
+import zio.http.endpoint.openapi._
+
+val endpoints = Chunk(
+  getUserEndpoint,
+  createUserEndpoint,
+  updateUserEndpoint,
+  deleteUserEndpoint
+)
+
+val openAPI = OpenAPIGen.fromEndpoints(
+  title = "User API",
+  version = "1.0.0",
+  endpoints
+)
+```
+
+## Serving OpenAPI JSON
+
+Serve the OpenAPI specification:
+
+```scala
+val openAPIRoutes = 
+  Routes(
+    Method.GET / "api" / "openapi" -> handler {
+      Response.json(openAPI.toJson)
+    }
+  )
+```
+
+## Adding Swagger UI
+
+Serve Swagger UI for interactive documentation:
+
+```scala
+import zio.http.endpoint.openapi.SwaggerUI
+
+val swaggerRoutes = SwaggerUI.routes("api" / "openapi")
+
+val allRoutes = openAPIRoutes ++ swaggerRoutes
+```
+
+## Documenting Endpoints
+
+Add documentation to endpoints:
+
+```scala
+val getUserEndpoint = 
+  Endpoint(Method.GET / "users" / int("id"))
+    .in[Unit]
+    .out[User]
+    ?? Doc.p("Get a user by ID")
+```
+
+## Adding Examples
+
+Provide example values:
+
+```scala
+val createUserEndpoint = 
+  Endpoint(Method.POST / "users")
+    .in[CreateUserRequest](Doc.p("User creation request"))
+    .out[User](Doc.p("Created user"))
+    .exampleIn(CreateUserRequest("John Doe", "john@example.com"))
+    .exampleOut(User(1, "John Doe", "john@example.com"))
+```
+
+<Note>
+OpenAPI generation requires endpoints to use ZIO Schema for request/response types.
+</Note>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Endpoints" href="/advanced/endpoints">
+    Define declarative endpoints
+  </Card>
+  <Card title="REST API Example" href="/examples/rest-api">
+    Complete OpenAPI example
+  </Card>
+  <Card title="Codec" href="/advanced/codec">
+    HTTP codec system
+  </Card>
+  <Card title="Endpoint API" href="/api/endpoint">
+    Endpoint API reference
+  </Card>
+</CardGroup>

@@ -1,0 +1,476 @@
+---
+title: Query Parameters
+description: Extract and work with URL query parameters in ZIO HTTP
+---
+
+Query parameters allow you to pass additional data to your API through URL query strings. ZIO HTTP provides a rich API for accessing, validating, and transforming query parameters in a type-safe way.
+
+## Accessing Query Parameters
+
+Access query parameters from the `Request` object:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "search" -> handler { (req: Request) =>
+  val query = req.queryParam("q")
+  query match {
+    case Some(searchTerm) => Response.text(s"Searching for: $searchTerm")
+    case None => Response.text("No search term provided")
+  }
+}
+
+// GET /search?q=zio -> "Searching for: zio"
+// GET /search -> "No search term provided"
+```
+
+## Query Parameter Methods
+
+### Get Single Parameter
+
+Retrieve the first value of a query parameter:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "items" -> handler { (req: Request) =>
+  val page = req.queryParam("page")
+  // page: Option[String]
+  
+  Response.text(s"Page: ${page.getOrElse("1")}")
+}
+
+// GET /items?page=2 -> "Page: 2"
+// GET /items -> "Page: 1"
+```
+
+### Get All Parameter Values
+
+Retrieve all values for a parameter (useful for repeated parameters):
+
+```scala
+import zio.http._
+import zio.Chunk
+
+val route = Method.GET / "filter" -> handler { (req: Request) =>
+  val tags = req.queryParams("tag")
+  // tags: Chunk[String]
+  
+  Response.text(s"Tags: ${tags.mkString(", ")}")
+}
+
+// GET /filter?tag=scala&tag=zio&tag=http
+// Response: "Tags: scala, zio, http"
+```
+
+### Get with Default Value
+
+Use `queryParamOrElse` for a default value:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "api" / "users" -> handler { (req: Request) =>
+  val limit = req.queryParamOrElse("limit", "10")
+  Response.text(s"Limit: $limit")
+}
+
+// GET /api/users?limit=20 -> "Limit: 20"
+// GET /api/users -> "Limit: 10"
+```
+
+### Check Parameter Existence
+
+Check if a parameter exists:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "data" -> handler { (req: Request) =>
+  val includeMetadata = req.hasQueryParam("metadata")
+  Response.text(s"Include metadata: $includeMetadata")
+}
+
+// GET /data?metadata -> true
+// GET /data -> false
+```
+
+## Typed Query Parameters
+
+Use ZIO Schema to parse query parameters into specific types:
+
+```scala
+import zio.http._
+import zio.schema.Schema
+
+val route = Method.GET / "api" / "items" -> handler { (req: Request) =>
+  // Parse as Int
+  val pageResult = req.query[Int]("page")
+  // pageResult: Either[HttpCodecError.QueryParamError, Int]
+  
+  pageResult match {
+    case Right(page) => Response.text(s"Page: $page")
+    case Left(error) => Response.badRequest(s"Invalid page parameter: $error")
+  }
+}
+
+// GET /api/items?page=5 -> "Page: 5"
+// GET /api/items?page=abc -> "Invalid page parameter: ..."
+```
+
+### Common Type Conversions
+
+```scala
+import zio.http._
+import zio.schema.Schema
+
+val route = Method.GET / "config" -> handler { (req: Request) =>
+  // Parse different types
+  val count = req.query[Int]("count")
+  val price = req.query[Double]("price")
+  val enabled = req.query[Boolean]("enabled")
+  val created = req.query[java.time.Instant]("created")
+  val id = req.query[java.util.UUID]("id")
+  
+  Response.text("Parameters parsed")
+}
+```
+
+### Typed Parameters with Defaults
+
+Combine type parsing with default values:
+
+```scala
+import zio.http._
+import zio.schema.Schema
+
+val route = Method.GET / "list" -> handler { (req: Request) =>
+  val page = req.queryOrElse[Int]("page", 1)
+  val limit = req.queryOrElse[Int]("limit", 10)
+  
+  Response.text(s"Page $page, Limit $limit")
+}
+
+// GET /list -> "Page 1, Limit 10"
+// GET /list?page=3&limit=20 -> "Page 3, Limit 20"
+```
+
+## ZIO Effects for Query Parameters
+
+Use `queryZIO` for effect-based parameter handling:
+
+```scala
+import zio.http._
+import zio.schema.Schema
+
+val route = Method.GET / "users" / int("id") -> handler { (userId: Int, req: Request) =>
+  for {
+    includeDeleted <- req.queryZIO[Boolean]("includeDeleted")
+      .catchAll(_ => ZIO.succeed(false))
+    user <- getUserById(userId, includeDeleted)
+  } yield Response.json(user.toJson)
+}
+```
+
+## Multiple Query Parameters
+
+Work with multiple query parameters:
+
+```scala
+import zio.http._
+import zio.schema.Schema
+
+val route = Method.GET / "search" -> handler { (req: Request) =>
+  val query = req.queryParam("q")
+  val page = req.queryOrElse[Int]("page", 1)
+  val limit = req.queryOrElse[Int]("limit", 10)
+  val sort = req.queryParamOrElse("sort", "relevance")
+  
+  Response.text(s"Query: $query, Page: $page, Limit: $limit, Sort: $sort")
+}
+
+// GET /search?q=zio&page=2&limit=20&sort=date
+```
+
+## Complex Query Parameter Types
+
+Parse query parameters as case classes:
+
+```scala
+import zio.http._
+import zio.schema.{DeriveSchema, Schema}
+
+case class Pagination(
+  page: Int,
+  limit: Int
+)
+
+object Pagination {
+  implicit val schema: Schema[Pagination] = DeriveSchema.gen[Pagination]
+}
+
+val route = Method.GET / "items" -> handler { (req: Request) =>
+  val paginationResult = req.query[Pagination]
+  
+  paginationResult match {
+    case Right(pagination) => 
+      Response.text(s"Page ${pagination.page}, Limit ${pagination.limit}")
+    case Left(error) => 
+      Response.badRequest("Invalid pagination parameters")
+  }
+}
+
+// GET /items?page=2&limit=20
+// Automatically parses into Pagination(2, 20)
+```
+
+## Collection Parameters
+
+Parse query parameters as collections:
+
+```scala
+import zio.http._
+import zio.schema.Schema
+import zio.Chunk
+
+val route = Method.GET / "filter" -> handler { (req: Request) =>
+  // Parse as Chunk[Int]
+  val idsResult = req.query[Chunk[Int]]("id")
+  
+  idsResult match {
+    case Right(ids) => Response.text(s"IDs: ${ids.mkString(", ")}")
+    case Left(error) => Response.badRequest("Invalid ID parameters")
+  }
+}
+
+// GET /filter?id=1&id=2&id=3
+// Response: "IDs: 1, 2, 3"
+```
+
+## Query Parameter Object
+
+Access all query parameters as a `QueryParams` object:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "debug" -> handler { (req: Request) =>
+  val allParams = req.queryParameters
+  
+  // Get all as a map
+  val paramsMap = allParams.map
+  
+  // Check if empty
+  val hasParams = allParams.nonEmpty
+  
+  // Encode back to string
+  val encoded = allParams.encode
+  
+  Response.text(s"Query string: $encoded")
+}
+```
+
+## Modifying Query Parameters
+
+Update query parameters on a request:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "proxy" -> handler { (req: Request) =>
+  val modifiedReq = req.updateQueryParams { params =>
+    QueryParams(
+      "timestamp" -> java.time.Instant.now().toString,
+      "source" -> "proxy"
+    ) ++ params
+  }
+  
+  // Forward modified request
+  Client.request(modifiedReq)
+}
+```
+
+## Query Parameter Validation
+
+Validate query parameters with custom logic:
+
+```scala
+import zio.http._
+import zio.schema.Schema
+
+val route = Method.GET / "items" -> handler { (req: Request) =>
+  val result = for {
+    page <- req.query[Int]("page")
+      .filterOrElse(_ > 0, HttpCodecError.CustomError("page", "Page must be positive"))
+    limit <- req.query[Int]("limit")
+      .filterOrElse(l => l > 0 && l <= 100, 
+        HttpCodecError.CustomError("limit", "Limit must be between 1 and 100"))
+  } yield (page, limit)
+  
+  result match {
+    case Right((page, limit)) => Response.text(s"Page $page, Limit $limit")
+    case Left(error) => Response.badRequest(error.message)
+  }
+}
+```
+
+## Encoding Query Parameters
+
+Create query parameter strings:
+
+```scala
+import zio.http._
+
+// Create from pairs
+val params = QueryParams(
+  "page" -> "2",
+  "limit" -> "10",
+  "sort" -> "name"
+)
+
+val encoded = params.encode
+// encoded: "page=2&limit=10&sort=name"
+
+// Create from Map
+val paramsMap = QueryParams(Map(
+  "filter" -> Chunk("active", "verified"),
+  "sort" -> Chunk("date")
+))
+```
+
+## Decoding Query Strings
+
+Parse query strings into `QueryParams`:
+
+```scala
+import zio.http._
+
+val queryString = "page=2&limit=10&tag=scala&tag=zio"
+val params = QueryParams.decode(queryString)
+
+val page = params.queryParam("page") // Some("2")
+val tags = params.queryParams("tag")  // Chunk("scala", "zio")
+```
+
+## Optional Query Parameters
+
+Handle optional parameters gracefully:
+
+```scala
+import zio.http._
+import zio.schema.Schema
+
+val route = Method.GET / "search" -> handler { (req: Request) =>
+  val query = req.queryParam("q")
+  val category = req.queryParam("category")
+  val minPrice = req.query[Double]("minPrice").toOption
+  val maxPrice = req.query[Double]("maxPrice").toOption
+  
+  (query, category, minPrice, maxPrice) match {
+    case (Some(q), cat, min, max) =>
+      Response.text(s"Search: $q, Category: $cat, Price: $min-$max")
+    case _ =>
+      Response.badRequest("Query parameter 'q' is required")
+  }
+}
+```
+
+## Query Parameter Filters
+
+Filter query parameters:
+
+```scala
+import zio.http._
+
+val route = Method.GET / "api" / "data" -> handler { (req: Request) =>
+  val params = req.queryParameters
+  
+  // Filter parameters
+  val filtered = params.filter { (key, values) =>
+    key.startsWith("filter_")
+  }
+  
+  Response.text(s"Active filters: ${filtered.map.keys.mkString(", ")}")
+}
+
+// GET /api/data?filter_status=active&filter_type=premium&sort=date
+// Response: "Active filters: filter_status, filter_type"
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Provide Defaults" icon="gear">
+    Always provide sensible defaults for optional parameters to improve API usability.
+  </Card>
+
+  <Card title="Validate Early" icon="shield-check">
+    Validate and parse query parameters at the route level to fail fast on invalid input.
+  </Card>
+
+  <Card title="Type Safety" icon="lock">
+    Use typed query parameters with Schema instead of string parsing for better type safety.
+  </Card>
+
+  <Card title="Document Parameters" icon="book">
+    Document all query parameters, including their types, defaults, and constraints.
+  </Card>
+</CardGroup>
+
+## Common Patterns
+
+### Pagination
+
+```scala
+import zio.http._
+import zio.schema.Schema
+
+val route = Method.GET / "items" -> handler { (req: Request) =>
+  val page = req.queryOrElse[Int]("page", 1)
+  val limit = req.queryOrElse[Int]("limit", 10)
+  val offset = (page - 1) * limit
+  
+  // Use offset and limit for database query
+  Response.text(s"Fetching items $offset to ${offset + limit}")
+}
+```
+
+### Filtering and Sorting
+
+```scala
+import zio.http._
+
+val route = Method.GET / "users" -> handler { (req: Request) =>
+  val status = req.queryParam("status")
+  val role = req.queryParam("role")
+  val sortBy = req.queryParamOrElse("sort", "createdAt")
+  val order = req.queryParamOrElse("order", "desc")
+  
+  // Build query based on parameters
+  Response.text(s"Filtering by: status=$status, role=$role, sort=$sortBy $order")
+}
+```
+
+### Search with Facets
+
+```scala
+import zio.http._
+import zio.schema.Schema
+import zio.Chunk
+
+val route = Method.GET / "products" / "search" -> handler { (req: Request) =>
+  val query = req.queryParamOrElse("q", "")
+  val categories = req.queryParams("category")
+  val minPrice = req.query[Double]("minPrice").toOption
+  val maxPrice = req.query[Double]("maxPrice").toOption
+  val inStock = req.query[Boolean]("inStock").toOption
+  
+  Response.text(s"Searching: $query with filters")
+}
+```
+
+## See Also
+
+- [Route Patterns](/routing/route-patterns) - Define route patterns with HTTP methods
+- [Path Parameters](/routing/path-parameters) - Extract typed values from URL paths
+- [Request Object](/api-reference/request) - Complete Request API documentation

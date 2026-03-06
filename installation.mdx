@@ -1,0 +1,150 @@
+---
+title: Installation
+description: Learn how to install ZIO HTTP in your Scala project
+---
+
+ZIO HTTP is a Scala library for building HTTP applications. It's powered by ZIO and Netty, providing a type-safe, composable approach to web development.
+
+## Prerequisites
+
+Before installing ZIO HTTP, ensure you have:
+
+- **JDK 17 or later** (JDK 21 is recommended)
+- **Scala 2.12.21, 2.13.18, or 3.3.7**
+- A build tool (sbt, Maven, or Gradle)
+
+## Installation
+
+<CodeGroup>
+
+```scala sbt
+// In build.sbt
+libraryDependencies += "dev.zio" %% "zio-http" % "3.3.2"
+```
+
+```xml Maven
+<dependency>
+  <groupId>dev.zio</groupId>
+  <artifactId>zio-http_3</artifactId>
+  <version>3.3.2</version>
+</dependency>
+```
+
+```groovy Gradle
+implementation 'dev.zio:zio-http_3:3.3.2'
+```
+
+</CodeGroup>
+
+<Note>
+The artifact ID depends on your Scala version:
+- `zio-http_2.12` for Scala 2.12
+- `zio-http_2.13` for Scala 2.13
+- `zio-http_3` for Scala 3
+</Note>
+
+## Additional Modules
+
+ZIO HTTP provides several optional modules for extended functionality:
+
+### CLI Support
+
+Build command-line applications that interact with HTTP APIs:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http-cli" % "3.3.2"
+```
+
+### Testing Utilities
+
+First-class testing support without requiring a live server:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http-testkit" % "3.3.2" % Test
+```
+
+### Code Generation
+
+Generate HTTP endpoints from OpenAPI specifications:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http-gen" % "3.3.2"
+```
+
+### HTMX Integration
+
+Built-in support for HTMX attributes and responses:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http-htmx" % "3.3.2"
+```
+
+### STOMP Protocol
+
+WebSocket-based STOMP protocol support:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http-stomp" % "3.3.2"
+```
+
+### Datastar SDK
+
+Real-time UI updates with Datastar:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-http-datastar-sdk" % "3.3.2"
+```
+
+## Version History
+
+<Warning>
+If you're migrating from an older version, note the following:
+- Versions `1.x` or `2.x` with organization `io.d11` are legacy versions from Dream11
+- Modern versions from the ZIO organization started with `0.0.x` in 2023
+- Version `1.0.0` release candidates appeared in April 2023
+- Current stable version is `3.3.2`
+</Warning>
+
+## Verifying Installation
+
+After adding the dependency, verify your installation by creating a simple test file:
+
+```scala
+import zio._
+import zio.http._
+
+object InstallationTest extends ZIOAppDefault {
+  def run = Console.printLine("ZIO HTTP installed successfully!")
+}
+```
+
+Run this with your build tool:
+
+<CodeGroup>
+
+```bash sbt
+sbt run
+```
+
+```bash Maven
+mvn compile exec:java
+```
+
+```bash Gradle
+gradle run
+```
+
+</CodeGroup>
+
+If you see the success message, ZIO HTTP is properly installed and ready to use!
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Build your first HTTP server in minutes
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts">
+    Learn the fundamental concepts of ZIO HTTP
+  </Card>
+</CardGroup>

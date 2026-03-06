@@ -1,0 +1,602 @@
+---
+title: Streaming
+description: Streaming request and response bodies with ZIO Streams
+---
+
+ZIO HTTP provides powerful streaming capabilities using ZIO Streams, enabling efficient processing of large files, real-time data, and server-sent events without loading everything into memory.
+
+## Why Streaming?
+
+Streaming is essential for:
+
+- **Large files** - Process gigabytes of data without memory overflow
+- **Real-time data** - Server-Sent Events (SSE), WebSockets
+- **Efficient processing** - Transform data on-the-fly
+- **Memory efficiency** - Process data in chunks
+- **Backpressure** - Handle slow consumers gracefully
+
+## Streaming Request Bodies
+
+### Reading as Stream
+
+```scala
+import zio.http._
+import zio.stream._
+
+val app = Routes(
+  Method.POST / "upload" -> handler { (req: Request) =>
+    val stream: ZStream[Any, Throwable, Byte] = req.body.asStream
+    
+    stream
+      .runCount
+      .map(count => Response.text(s"Received $count bytes"))
+  }
+).toHttpApp
+```
+
+### Processing Stream Data
+
+```scala
+import zio.http._
+import zio.stream._
+
+val app = Routes(
+  Method.POST / "process" -> handler { (req: Request) =>
+    req.body.asStream
+      .via(ZPipeline.utf8Decode)  // Decode bytes to strings
+      .via(ZPipeline.splitLines)  // Split into lines
+      .filter(_.nonEmpty)         // Filter empty lines
+      .take(100)                  // Take first 100 lines
+      .runCollect
+      .map(lines => Response.text(s"Processed ${lines.size} lines"))
+  }
+).toHttpApp
+```
+
+### Stream to File
+
+```scala
+import zio.http._
+import zio.stream._
+import java.nio.file.{Paths, StandardOpenOption}
+
+val app = Routes(
+  Method.POST / "save" -> handler { (req: Request) =>
+    val path = Paths.get("uploads/data.bin")
+    
+    req.body.asStream
+      .run(ZSink.fromFile(path, StandardOpenOption.CREATE))
+      .as(Response.text("File saved"))
+  }
+).toHttpApp
+```
+
+## Streaming Response Bodies
+
+### Text Streaming
+
+```scala
+import zio.http._
+import zio.stream._
+
+val app = Routes(
+  Method.GET / "stream" -> handler {
+    val textStream = ZStream(
+      "Line 1\n",
+      "Line 2\n",
+      "Line 3\n"
+    )
+    
+    Response(
+      body = Body.fromCharSequenceStreamChunked(textStream)
+    )
+  }
+).toHttpApp
+```
+
+### Binary Streaming
+
+```scala
+import zio.http._
+import zio.stream._
+
+val app = Routes(
+  Method.GET / "download" -> handler {
+    val byteStream: ZStream[Any, Throwable, Byte] = 
+      ZStream.fromFile(Paths.get("large-file.zip"))
+    
+    Response(
+      body = Body.fromStreamChunked(byteStream)
+        .contentType(MediaType.application.zip)
+    ).addHeader(
+      "Content-Disposition",
+      "attachment; filename=\"download.zip\""
+    )
+  }
+).toHttpApp
+```
+
+### Chunked Transfer Encoding
+
+When content length is unknown, use chunked transfer:
+
+```scala
+import zio.http._
+import zio.stream._
+
+val app = Routes(
+  Method.GET / "data" -> handler {
+    val stream = ZStream.fromIterable(1 to 1000)
+      .map(i => s"Item $i\n")
+      .map(_.getBytes)
+      .flattenChunks
+    
+    Response(
+      body = Body.fromStreamChunked(stream)
+    )
+  }
+).toHttpApp
+```
+
+### Streaming with Known Length
+
+```scala
+import zio.http._
+import zio.stream._
+
+val data = "Hello World"
+val bytes = data.getBytes
+
+val stream = ZStream.fromIterable(bytes)
+
+val response = Response(
+  body = Body.fromStream(stream, contentLength = bytes.length.toLong)
+)
+```
+
+## File Streaming
+
+### Stream File Download
+
+```scala
+import zio.http._
+import zio.stream._
+import java.io.File
+import java.nio.file.Paths
+
+val fileRoute = Routes(
+  Method.GET / "download" / string("filename") -> handler { (filename: String, req: Request) =>
+    val file = new File(s"files/$filename")
+    
+    if (file.exists() && file.isFile) {
+      Body.fromFile(file, chunkSize = 8192).map { body =>
+        Response(
+          body = body.contentType(MediaType.application.`octet-stream`)
+        ).addHeader(
+          "Content-Disposition",
+          s"attachment; filename=\"$filename\""
+        )
+      }
+    } else {
+      ZIO.succeed(Response.notFound)
+    }
+  }
+).toHttpApp
+```
+
+### Partial Content (Range Requests)
+
+```scala
+import zio.http._
+import java.io.File
+
+val rangeRoute = Routes(
+  Method.GET / "video" / string("id") -> handler { (id: String, req: Request) =>
+    val file = new File(s"videos/$id.mp4")
+    
+    req.headers.get("Range") match {
+      case Some(range) =>
+        // Parse range header: "bytes=0-1023"
+        val parts = range.stripPrefix("bytes=").split("-")
+        val start = parts(0).toLong
+        val end = if (parts.length > 1 && parts(1).nonEmpty) 
+          parts(1).toLong 
+        else 
+          file.length() - 1
+        val length = end - start + 1
+        
+        Body.fromFileRange(file, start, length).map { body =>
+          Response(
+            status = Status.PartialContent,
+            body = body.contentType(MediaType.video.mp4)
+          ).addHeader("Content-Range", s"bytes $start-$end/${file.length()}")
+            .addHeader("Accept-Ranges", "bytes")
+        }
+        
+      case None =>
+        Body.fromFile(file).map { body =>
+          Response(
+            body = body.contentType(MediaType.video.mp4)
+          ).addHeader("Accept-Ranges", "bytes")
+        }
+    }
+  }
+).toHttpApp
+```
+
+## Server-Sent Events (SSE)
+
+### Basic SSE Stream
+
+```scala
+import zio.http._
+import zio.stream._
+import zio._
+import zio.schema.{DeriveSchema, Schema}
+
+case class Event(message: String, timestamp: Long)
+object Event {
+  implicit val schema: Schema[Event] = DeriveSchema.gen[Event]
+}
+
+val sseRoute = Routes(
+  Method.GET / "events" -> handler {
+    val eventStream = ZStream
+      .repeatZIO(Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS))
+      .map(time => ServerSentEvent(Event("ping", time)))
+      .schedule(Schedule.fixed(1.second))
+    
+    Response(
+      body = Body.fromStream(eventStream)(ServerSentEvent.defaultBinaryCodec[Event])
+    )
+  }
+).toHttpApp
+```
+
+### SSE with Multiple Event Types
+
+```scala
+import zio.http._
+import zio.stream._
+import zio._
+
+sealed trait ServerEvent
+case class UserJoined(username: String) extends ServerEvent
+case class Message(user: String, text: String) extends ServerEvent
+case class UserLeft(username: String) extends ServerEvent
+
+object ServerEvent {
+  implicit val schema: Schema[ServerEvent] = DeriveSchema.gen[ServerEvent]
+}
+
+val eventRoute = Routes(
+  Method.GET / "chat-events" -> handler {
+    val events: ZStream[Any, Nothing, ServerEvent] = 
+      ZStream(
+        UserJoined("Alice"),
+        Message("Alice", "Hello!"),
+        UserJoined("Bob"),
+        Message("Bob", "Hi Alice!")
+      ).schedule(Schedule.fixed(2.seconds))
+    
+    val sseStream = events.map(ServerSentEvent(_))
+    
+    Response(
+      body = Body.fromStream(sseStream)
+    ).addHeader("Content-Type", "text/event-stream")
+      .addHeader("Cache-Control", "no-cache")
+      .addHeader("Connection", "keep-alive")
+  }
+).toHttpApp
+```
+
+## Stream Transformations
+
+### Encoding/Decoding
+
+```scala
+import zio.stream._
+
+// UTF-8 decoding
+val textStream: ZStream[Any, Throwable, String] = 
+  byteStream.via(ZPipeline.utf8Decode)
+
+// UTF-8 encoding
+val encoded: ZStream[Any, Nothing, Byte] = 
+  textStream.via(ZPipeline.utf8Encode)
+
+// Line splitting
+val lines: ZStream[Any, Throwable, String] = 
+  textStream.via(ZPipeline.splitLines)
+```
+
+### Compression
+
+```scala
+import zio.stream._
+
+// Gzip compression
+val compressed: ZStream[Any, Throwable, Byte] = 
+  byteStream.via(ZPipeline.gzip)
+
+// Gzip decompression  
+val decompressed: ZStream[Any, Throwable, Byte] = 
+  compressedStream.via(ZPipeline.gunzip())
+```
+
+### Custom Transformations
+
+```scala
+import zio.stream._
+
+// Map
+val doubled = stream.map(_ * 2)
+
+// Filter
+val evens = stream.filter(_ % 2 == 0)
+
+// FlatMap
+val expanded = stream.flatMap(n => ZStream.fromIterable(1 to n))
+
+// Collect
+val processed = stream.collect {
+  case n if n > 0 => n * 2
+}
+```
+
+## Multipart Streaming
+
+### Streaming Multipart Upload
+
+```scala
+import zio.http._
+import zio.stream._
+import java.nio.file.{Paths, StandardOpenOption}
+
+val uploadRoute = Routes(
+  Method.POST / "upload-stream" -> handler { (req: Request) =>
+    for {
+      streamingForm <- req.body.asMultipartFormStream
+      result <- streamingForm.fields.runFoldWhile(List.empty[String])(_.size < 10) {
+        case (acc, field: FormField.StreamingBinary) =>
+          field.filename match {
+            case Some(filename) =>
+              val path = Paths.get(s"uploads/$filename")
+              field.data
+                .run(ZSink.fromFile(path, StandardOpenOption.CREATE))
+                .as(acc :+ filename)
+            case None =>
+              ZIO.succeed(acc)
+          }
+        case (acc, _) => 
+          ZIO.succeed(acc)
+      }.flatten
+    } yield Response.text(s"Uploaded: ${result.mkString(", ")}")
+  }
+).toHttpApp
+```
+
+### Streaming Binary Form Field
+
+```scala
+import zio.http._
+import zio.stream._
+
+val fileStream: ZStream[Any, Nothing, Byte] = 
+  ZStream.fromFile(Paths.get("large-file.bin"))
+
+val streamingField = FormField.streamingBinaryField(
+  name = "file",
+  data = fileStream,
+  mediaType = MediaType.application.`octet-stream`,
+  filename = Some("large-file.bin")
+)
+
+val form = Form(streamingField)
+```
+
+## Backpressure Handling
+
+### Buffering
+
+```scala
+import zio.stream._
+
+// Buffer elements
+val buffered = stream.buffer(100)
+
+// Throttle
+val throttled = stream.throttleShape(10, 1.second)(_ => 1)
+
+// Schedule with delays
+val scheduled = stream.schedule(Schedule.fixed(100.millis))
+```
+
+### Error Handling
+
+```scala
+import zio.stream._
+
+// Retry on failure
+val withRetry = stream.retry(Schedule.recurs(3))
+
+// Catch errors
+val safe = stream.catchAll { error =>
+  ZStream.succeed(defaultValue)
+}
+
+// Timeout
+val withTimeout = stream.timeout(30.seconds)
+```
+
+## Chunking Strategies
+
+### Custom Chunk Sizes
+
+```scala
+import zio.stream._
+import java.io.File
+
+// Small chunks for memory-constrained environments
+val smallChunks = Body.fromFile(
+  new File("large.dat"),
+  chunkSize = 1024  // 1 KB
+)
+
+// Large chunks for better throughput
+val largeChunks = Body.fromFile(
+  new File("huge.dat"),
+  chunkSize = 65536  // 64 KB
+)
+```
+
+### Rechunking
+
+```scala
+import zio.stream._
+
+// Rechunk to specific size
+val rechunked = stream.rechunk(4096)
+
+// Group into chunks
+val grouped = stream.grouped(100)
+```
+
+## Common Patterns
+
+### Progress Tracking
+
+```scala
+import zio.http._
+import zio.stream._
+import zio._
+
+def uploadWithProgress(req: Request): ZIO[Any, Throwable, Response] = {
+  for {
+    totalRef <- Ref.make(0L)
+    _ <- req.body.asStream
+      .tap(chunk => totalRef.update(_ + chunk.length))
+      .tap(_ => totalRef.get.flatMap(total => 
+        Console.printLine(s"Received: $total bytes")
+      ))
+      .runDrain
+    total <- totalRef.get
+  } yield Response.text(s"Total: $total bytes")
+}
+```
+
+### Stream Multiplexing
+
+```scala
+import zio.stream._
+import zio._
+
+val stream1 = ZStream(1, 2, 3)
+val stream2 = ZStream(4, 5, 6)
+
+// Merge streams
+val merged = stream1.merge(stream2)
+
+// Interleave streams
+val interleaved = stream1.interleave(stream2)
+
+// Zip streams
+val zipped = stream1.zip(stream2)
+```
+
+### Dynamic Stream Generation
+
+```scala
+import zio.http._
+import zio.stream._
+import zio._
+
+val dynamicRoute = Routes(
+  Method.GET / "generate" / int("count") -> handler { (count: Int, req: Request) =>
+    val stream = ZStream
+      .fromIterable(1 to count)
+      .map(i => s"Item $i\n")
+      .schedule(Schedule.fixed(100.millis))
+    
+    Response(
+      body = Body.fromCharSequenceStreamChunked(stream)
+    )
+  }
+).toHttpApp
+```
+
+### Log Tailing
+
+```scala
+import zio.http._
+import zio.stream._
+import java.nio.file.{Path, Paths}
+
+val logTailRoute = Routes(
+  Method.GET / "logs" / "tail" -> handler {
+    val logFile = Paths.get("/var/log/app.log")
+    
+    val tailStream = ZStream
+      .fromFile(logFile)
+      .via(ZPipeline.utf8Decode)
+      .via(ZPipeline.splitLines)
+      .takeRight(100)  // Last 100 lines
+    
+    Response(
+      body = Body.fromCharSequenceStreamChunked(
+        tailStream.intersperse("\n")
+      )
+    )
+  }
+).toHttpApp
+```
+
+## Best Practices
+
+<Tip>
+  Always use streaming for large files (>10MB) to prevent memory issues.
+</Tip>
+
+<Tip>
+  Set appropriate chunk sizes based on your memory constraints and throughput requirements.
+</Tip>
+
+<Warning>
+  Be careful with `runCollect` on streams - it loads everything into memory. Use `runFold` or `runDrain` instead for large streams.
+</Warning>
+
+<Tip>
+  Use backpressure mechanisms like `buffer` and `throttle` when dealing with fast producers and slow consumers.
+</Tip>
+
+### Performance Tips
+
+1. **Chunk size**: 4-64 KB is typically optimal
+2. **Buffer strategically**: Add buffers between slow and fast processing stages
+3. **Parallelize**: Use `mapZIOPar` for parallel processing
+4. **Avoid blocking**: Use `ZIO.attemptBlocking` for I/O operations
+5. **Resource safety**: Use `ensuring` or `acquireRelease` for cleanup
+
+### Pattern: Streaming with Resource Management
+
+```scala
+import zio.http._
+import zio.stream._
+import zio._
+import java.io.{FileInputStream, InputStream}
+
+def streamFromInputStream(
+  acquire: ZIO[Any, Throwable, InputStream]
+): ZStream[Any, Throwable, Byte] = {
+  ZStream.acquireReleaseWith(acquire)(is => 
+    ZIO.succeed(is.close())
+  ).flatMap { inputStream =>
+    ZStream.repeatZIOOption {
+      ZIO.attemptBlocking {
+        val byte = inputStream.read()
+        if (byte == -1) None else Some(byte.toByte)
+      }.some
+    }
+  }
+}
+```

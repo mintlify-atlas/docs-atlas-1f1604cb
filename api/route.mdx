@@ -1,0 +1,391 @@
+---
+title: Route
+description: API reference for zio.http.Route
+---
+
+`Route` represents a single HTTP route with a specific pattern and handler. Routes can either handle their errors (converting them to responses) or have polymorphic errors that must be handled before execution.
+
+## Type Signature
+
+```scala
+sealed trait Route[-Env, +Err]
+```
+
+<ParamField path="Env" type="type parameter">
+  The environment type required by the route's handler
+</ParamField>
+
+<ParamField path="Err" type="type parameter">
+  The error type that can be produced by the route
+</ParamField>
+
+## Core Properties
+
+### routePattern
+
+```scala
+def routePattern: RoutePattern[_]
+```
+
+<ResponseField name="return" type="RoutePattern[_]">
+  The route pattern defining the method and path this route matches
+</ResponseField>
+
+### location
+
+```scala
+def location: Trace
+```
+
+<ResponseField name="return" type="Trace">
+  The source location where the route was created (useful for debugging)
+</ResponseField>
+
+## Creating Routes
+
+### Route.route
+
+```scala
+def route[Params, Env](rpm: RoutePattern[Params]): UnhandledConstructor[Env, Params]
+```
+
+Creates a route from a route pattern. Returns a constructor that accepts a handler.
+
+<ParamField path="rpm" type="RoutePattern[Params]">
+  The route pattern specifying method and path
+</ParamField>
+
+**Example:**
+
+```scala
+import zio.http._
+
+Route.route(Method.GET / "users" / int("id")) { (id: Int, request: Request) =>
+  Handler.text(s"User ID: $id")
+}
+```
+
+### Route.handled
+
+```scala
+def handled[Params, Env](rpm: RoutePattern[Params]): HandledConstructor[Env, Params]
+```
+
+Creates a route that has already handled its errors (producing only responses).
+
+### Route.notFound
+
+```scala
+val notFound: Route[Any, Nothing]
+```
+
+A route that always returns 404 Not Found.
+
+## Error Handling
+
+### handleError
+
+```scala
+def handleError(f: Err => Response)(implicit trace: Trace): Route[Env, Nothing]
+```
+
+Handles all typed errors by converting them into HTTP responses.
+
+<ParamField path="f" type="Err => Response">
+  Function to convert errors into responses
+</ParamField>
+
+<ResponseField name="return" type="Route[Env, Nothing]">
+  A route that cannot fail (all errors converted to responses)
+</ResponseField>
+
+**Example:**
+
+```scala
+route.handleError { 
+  case e: NotFoundException => Response.notFound(e.getMessage)
+  case e: ForbiddenException => Response.forbidden(e.getMessage)
+}
+```
+
+### handleErrorZIO
+
+```scala
+def handleErrorZIO[Env1 <: Env](f: Err => ZIO[Env1, Nothing, Response])(implicit trace: Trace): Route[Env1, Nothing]
+```
+
+Handles errors effectfully, allowing access to ZIO environment.
+
+<ParamField path="f" type="Err => ZIO[Env1, Nothing, Response]">
+  Effectful function to convert errors into responses
+</ParamField>
+
+### handleErrorCause
+
+```scala
+def handleErrorCause(f: Cause[Err] => Response)(implicit trace: Trace): Route[Env, Nothing]
+```
+
+Handles both typed errors and defects by examining the full `Cause`.
+
+<ParamField path="f" type="Cause[Err] => Response">
+  Function receiving the complete error cause
+</ParamField>
+
+### handleErrorCauseZIO
+
+```scala
+def handleErrorCauseZIO[Env1 <: Env](f: Cause[Err] => ZIO[Env1, Nothing, Response])(implicit trace: Trace): Route[Env1, Nothing]
+```
+
+Effectful version of `handleErrorCause`.
+
+### handleErrorRequest
+
+```scala
+def handleErrorRequest(f: (Err, Request) => Response)(implicit trace: Trace): Route[Env, Nothing]
+```
+
+Handles errors with access to the request that caused the error.
+
+<ParamField path="f" type="(Err, Request) => Response">
+  Function receiving both error and request
+</ParamField>
+
+**Example:**
+
+```scala
+route.handleErrorRequest { (err, req) =>
+  Response.internalServerError(s"Error processing ${req.path}: ${err.getMessage}")
+}
+```
+
+### handleErrorRequestCause
+
+```scala
+def handleErrorRequestCause(f: (Request, Cause[Err]) => Response)(implicit trace: Trace): Route[Env, Nothing]
+```
+
+Handles error causes with access to the originating request.
+
+### handleErrorRequestCauseZIO
+
+```scala
+def handleErrorRequestCauseZIO[Env1 <: Env](f: (Request, Cause[Err]) => ZIO[Env1, Nothing, Response])(implicit trace: Trace): Route[Env1, Nothing]
+```
+
+Effectful version with both request and cause.
+
+### sandbox
+
+```scala
+def sandbox(implicit trace: Trace): Route[Env, Nothing]
+```
+
+Automatically translates all failures into responses using best-effort heuristics.
+
+<ResponseField name="return" type="Route[Env, Nothing]">
+  Route with all errors automatically converted to appropriate HTTP responses
+</ResponseField>
+
+## Error Observation
+
+### tapErrorZIO
+
+```scala
+def tapErrorZIO[Err1 >: Err](f: Err => ZIO[Any, Err1, Any])(implicit trace: Trace): Route[Env, Err1]
+```
+
+Effectfully peeks at failures without changing the result.
+
+<ParamField path="f" type="Err => ZIO[Any, Err1, Any]">
+  Effect to run when observing an error
+</ParamField>
+
+**Example:**
+
+```scala
+route.tapErrorZIO { err =>
+  ZIO.logError(s"Route failed: ${err.getMessage}")
+}
+```
+
+### tapErrorCauseZIO
+
+```scala
+def tapErrorCauseZIO[Err1 >: Err](f: Cause[Err] => ZIO[Any, Err1, Any])(implicit trace: Trace): Route[Env, Err1]
+```
+
+Effectfully peeks at the complete error cause.
+
+## Error Transformation
+
+### mapError
+
+```scala
+def mapError[Err1](fxn: Err => Err1): Route[Env, Err1]
+```
+
+Transforms the error type using a pure function.
+
+<ParamField path="fxn" type="Err => Err1">
+  Function to transform errors
+</ParamField>
+
+### mapErrorZIO
+
+```scala
+def mapErrorZIO[Err1](fxn: Err => ZIO[Any, Err1, Response])(implicit trace: Trace): Route[Env, Err1]
+```
+
+Effectfully transforms errors.
+
+## Path Manipulation
+
+### nest
+
+```scala
+def nest(prefix: PathCodec[Unit]): Route[Env, Err]
+```
+
+Nests the route under a path prefix.
+
+<ParamField path="prefix" type="PathCodec[Unit]">
+  The path prefix to add
+</ParamField>
+
+**Example:**
+
+```scala
+val userRoute = Route.route(Method.GET / "profile") { ... }
+val nestedRoute = userRoute.nest(Root / "api" / "v1")
+// Now matches: GET /api/v1/profile
+```
+
+## Execution
+
+### apply
+
+```scala
+def apply(request: Request)(implicit ev: Err <:< Response, trace: Trace): ZIO[Scope & Env, Response, Response]
+```
+
+Applies the route to a request. Requires errors to be responses.
+
+<ParamField path="request" type="Request">
+  The HTTP request to process
+</ParamField>
+
+<ResponseField name="return" type="ZIO[Scope & Env, Response, Response]">
+  Effect that produces a response or fails with a response
+</ResponseField>
+
+### run
+
+```scala
+def run(request: Request)(implicit trace: Trace): ZIO[Scope & Env, Either[Err, Response], Response]
+```
+
+Runs the route, exposing unhandled errors as `Left[Err]`.
+
+### isDefinedAt
+
+```scala
+def isDefinedAt(request: Request): Boolean
+```
+
+Checks if the route matches the request's method and path.
+
+<ParamField path="request" type="Request">
+  The request to check
+</ParamField>
+
+<ResponseField name="return" type="Boolean">
+  True if the route pattern matches the request
+</ResponseField>
+
+## Conversion
+
+### toHandler
+
+```scala
+def toHandler(implicit ev: Err <:< Response, trace: Trace): Handler[Env, Response, Request, Response]
+```
+
+Converts the route into a handler. Requires errors to be responses.
+
+<ResponseField name="return" type="Handler[Env, Response, Request, Response]">
+  Handler that processes requests
+</ResponseField>
+
+### toRoutes
+
+```scala
+def toRoutes: Routes[Env, Err]
+```
+
+Wraps the single route in a `Routes` collection.
+
+<ResponseField name="return" type="Routes[Env, Err]">
+  Routes containing only this route
+</ResponseField>
+
+## Dependency Injection
+
+### provideEnvironment
+
+```scala
+def provideEnvironment(env: ZEnvironment[Env]): Route[Any, Err]
+```
+
+Provides the environment to the route, eliminating environmental requirements.
+
+<ParamField path="env" type="ZEnvironment[Env]">
+  The environment to provide
+</ParamField>
+
+<ResponseField name="return" type="Route[Any, Err]">
+  Route with no environment requirements
+</ResponseField>
+
+## Transformation
+
+### transform
+
+```scala
+def transform[Env1](f: Handler[Env, Response, Request, Response] => Handler[Env1, Response, Request, Response]): Route[Env1, Err]
+```
+
+Transforms the route's handler using the provided function.
+
+<ParamField path="f" type="Handler[Env, Response, Request, Response] => Handler[Env1, Response, Request, Response]">
+  Function to transform the handler
+</ParamField>
+
+**Example:**
+
+```scala
+route.transform { handler =>
+  handler.contramapZIO { req =>
+    // Add authentication check
+    authenticate(req).as(req)
+  }
+}
+```
+
+### asErrorType
+
+```scala
+def asErrorType[Err2](implicit ev: Err <:< Err2): Route[Env, Err2]
+```
+
+Widens the error type.
+
+## Internal Variants
+
+The `Route` sealed trait has four internal implementations:
+
+- **`Handled`**: Route with all errors handled (produces only responses)
+- **`Unhandled`**: Route with polymorphic errors requiring handling
+- **`Provided`**: Route with environment already provided
+- **`Augmented`**: Route with handler transformation applied

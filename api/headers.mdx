@@ -1,0 +1,377 @@
+---
+title: Headers
+description: API reference for the Headers type in ZIO HTTP
+---
+
+## Overview
+
+`Headers` represents an immutable collection of HTTP headers. It extends `HeaderOps[Headers]` and `Iterable[Header]`, providing powerful operators to add, remove, and modify headers.
+
+```scala
+sealed trait Headers extends HeaderOps[Headers] with Iterable[Header]
+```
+
+## Creating Headers
+
+### Empty Headers
+
+```scala
+val empty: Headers = Headers.empty
+```
+
+### From Key-Value Pairs
+
+<ParamField path="name" type="CharSequence" required>
+  The header name
+</ParamField>
+
+<ParamField path="value" type="CharSequence" required>
+  The header value
+</ParamField>
+
+```scala
+// Single header
+val headers = Headers("Content-Type", "application/json")
+
+// Multiple headers from tuples
+val headers = Headers(
+  ("Content-Type", "application/json"),
+  ("Authorization", "Bearer token123")
+)
+
+// From a single tuple
+val headers = Headers(("Content-Type", "application/json"))
+```
+
+### From Header Objects
+
+```scala
+// From typed Header objects
+val headers = Headers(
+  Header.ContentType(MediaType.application.json),
+  Header.Authorization.Bearer("token123")
+)
+
+// From an Iterable
+val headerList: List[Header] = List(
+  Header.Custom("X-Custom-Header", "value")
+)
+val headers = Headers(headerList)
+val headers2 = Headers.fromIterable(headerList)
+```
+
+## Core Methods
+
+### Combining Headers
+
+```scala
+def ++(other: Headers): Headers
+def combine(other: Headers): Headers
+```
+
+Combines two `Headers` collections. Both methods are equivalent.
+
+```scala
+val headers1 = Headers("Content-Type", "application/json")
+val headers2 = Headers("Authorization", "Bearer token")
+val combined = headers1 ++ headers2
+// or
+val combined = headers1.combine(headers2)
+```
+
+### Conditional Combining
+
+```scala
+def combineIf(cond: Boolean)(other: Headers): Headers
+```
+
+<ParamField path="cond" type="Boolean" required>
+  Condition to evaluate
+</ParamField>
+
+<ParamField path="other" type="Headers" required>
+  Headers to combine if condition is true
+</ParamField>
+
+```scala
+val headers = Headers("Content-Type", "application/json")
+  .combineIf(isSecure) {
+    Headers("Strict-Transport-Security", "max-age=31536000")
+  }
+```
+
+### Checking for Headers
+
+```scala
+def contains(key: CharSequence): Boolean
+```
+
+<ParamField path="key" type="CharSequence" required>
+  Header name to check (case-insensitive)
+</ParamField>
+
+<ResponseField name="result" type="Boolean">
+  Returns `true` if the header exists
+</ResponseField>
+
+```scala
+val headers = Headers("Content-Type", "application/json")
+val hasContentType = headers.contains("Content-Type") // true
+val hasAuth = headers.contains("Authorization") // false
+```
+
+### Getting Header Values
+
+```scala
+def get(key: CharSequence): Option[String]
+def get(headerType: Header.HeaderType): Option[headerType.HeaderValue]
+```
+
+<ParamField path="key" type="CharSequence" required>
+  Header name (case-insensitive)
+</ParamField>
+
+<ResponseField name="result" type="Option[String]">
+  Returns `Some(value)` if header exists, `None` otherwise
+</ResponseField>
+
+```scala
+val headers = Headers("Content-Type", "application/json")
+
+// Get by name
+val contentType: Option[String] = headers.get("Content-Type")
+// Some("application/json")
+
+// Get by typed header type
+val contentType: Option[Header.ContentType] = 
+  headers.get(Header.ContentType)
+```
+
+### Getting All Values
+
+```scala
+def getAll(headerType: Header.HeaderType): Chunk[headerType.HeaderValue]
+```
+
+Returns all headers of a specific type (useful for headers that can appear multiple times).
+
+```scala
+val headers = Headers(
+  Header.SetCookie(Cookie("session", "abc123")),
+  Header.SetCookie(Cookie("user", "john"))
+)
+val cookies: Chunk[Header.SetCookie] = 
+  headers.getAll(Header.SetCookie)
+```
+
+### Modifying Headers
+
+```scala
+def modify(f: Header => Header): Headers
+```
+
+<ParamField path="f" type="Header => Header" required>
+  Function to transform each header
+</ParamField>
+
+```scala
+val headers = Headers("X-Custom", "value")
+val modified = headers.modify { header =>
+  if (header.headerName.startsWith("X-"))
+    Header.Custom(header.headerName.toUpperCase, header.renderedValue)
+  else
+    header
+}
+```
+
+### Conditional Headers
+
+```scala
+def when(cond: Boolean): Headers
+```
+
+<ParamField path="cond" type="Boolean" required>
+  Condition to evaluate
+</ParamField>
+
+<ResponseField name="result" type="Headers">
+  Returns `self` if `cond` is true, otherwise `Headers.Empty`
+</ResponseField>
+
+```scala
+val secureHeaders = Headers(
+  "Strict-Transport-Security" -> "max-age=31536000"
+).when(isSecure)
+```
+
+### Updating Headers
+
+```scala
+def updateHeaders(update: Headers => Headers)(implicit trace: Trace): Headers
+```
+
+<ParamField path="update" type="Headers => Headers" required>
+  Function to update the headers
+</ParamField>
+
+```scala
+val headers = Headers("Content-Type", "application/json")
+val updated = headers.updateHeaders { h =>
+  h ++ Headers("Authorization", "Bearer token")
+}
+```
+
+## Iteration
+
+```scala
+def iterator: Iterator[Header]
+```
+
+Since `Headers` extends `Iterable[Header]`, you can use all standard Scala collection methods:
+
+```scala
+val headers = Headers(
+  ("Content-Type", "application/json"),
+  ("Authorization", "Bearer token")
+)
+
+// Iterate
+headers.foreach { header =>
+  println(s"${header.headerName}: ${header.renderedValue}")
+}
+
+// Filter
+val customHeaders = headers.filter(_.headerName.startsWith("X-"))
+
+// Map
+val headerNames = headers.map(_.headerName).toList
+```
+
+## Companion Object Methods
+
+### Conditional Construction
+
+```scala
+def when(cond: Boolean)(headers: => Headers): Headers
+```
+
+Constructs headers conditionally.
+
+```scala
+val headers = Headers.when(isDevelopment) {
+  Headers("X-Debug-Mode", "true")
+}
+```
+
+### If-Then-Else Construction
+
+```scala
+def ifThenElse(cond: Boolean)(onTrue: => Headers, onFalse: => Headers): Headers
+```
+
+```scala
+val headers = Headers.ifThenElse(isProduction)(
+  onTrue = Headers("X-Environment", "production"),
+  onFalse = Headers("X-Environment", "development")
+)
+```
+
+## Type Signature
+
+```scala
+package zio.http
+
+import zio.{Chunk, Trace}
+
+sealed trait Headers extends HeaderOps[Headers] with Iterable[Header] {
+  def ++(other: Headers): Headers
+  def combine(other: Headers): Headers
+  def combineIf(cond: Boolean)(other: Headers): Headers
+  def contains(key: CharSequence): Boolean
+  def get(key: CharSequence): Option[String]
+  def get(headerType: Header.HeaderType): Option[headerType.HeaderValue]
+  def getAll(headerType: Header.HeaderType): Chunk[headerType.HeaderValue]
+  def headers: Headers
+  def iterator: Iterator[Header]
+  def modify(f: Header => Header): Headers
+  def updateHeaders(update: Headers => Headers)(implicit trace: Trace): Headers
+  def when(cond: Boolean): Headers
+}
+
+object Headers {
+  def apply(name: CharSequence, value: CharSequence): Headers
+  def apply(tuple2: (CharSequence, CharSequence)): Headers
+  def apply(value: (CharSequence, CharSequence), values: (CharSequence, CharSequence)*): Headers
+  def apply(headers: Header*): Headers
+  def apply(iter: Iterable[Header]): Headers
+  def empty: Headers
+  def fromIterable(iter: Iterable[Header]): Headers
+  def ifThenElse(cond: Boolean)(onTrue: => Headers, onFalse: => Headers): Headers
+  def when(cond: Boolean)(headers: => Headers): Headers
+}
+```
+
+## Examples
+
+### Building Response Headers
+
+```scala
+import zio.http._
+
+val headers = Headers(
+  Header.ContentType(MediaType.application.json),
+  Header.ContentLength(1024L)
+) ++ Headers.when(enableCors) {
+  Headers(
+    Header.AccessControlAllowOrigin("*"),
+    Header.AccessControlAllowMethods(Method.GET, Method.POST)
+  )
+}
+
+val response = Response(
+  status = Status.Ok,
+  headers = headers,
+  body = Body.fromString("""{ "status": "ok" }""")
+)
+```
+
+### Extracting Header Values
+
+```scala
+import zio.http._
+
+def handleRequest(request: Request): Response = {
+  val authToken = request.headers.get("Authorization")
+  val contentType = request.headers.get(Header.ContentType)
+  
+  authToken match {
+    case Some(token) if token.startsWith("Bearer ") =>
+      Response.ok
+    case _ =>
+      Response.status(Status.Unauthorized)
+  }
+}
+```
+
+### Working with Multiple Headers
+
+```scala
+import zio.http._
+
+val headers = Headers(
+  ("X-Request-ID", "12345"),
+  ("X-Custom-Header", "value1")
+)
+
+// Add more headers
+val updated = headers ++ Headers(
+  "X-Another-Header" -> "value2"
+)
+
+// Check and retrieve
+if (updated.contains("X-Request-ID")) {
+  updated.get("X-Request-ID").foreach { id =>
+    println(s"Request ID: $id")
+  }
+}
+```

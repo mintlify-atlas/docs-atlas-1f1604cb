@@ -1,0 +1,478 @@
+---
+title: Body
+description: Working with request and response bodies in ZIO HTTP
+---
+
+The `Body` trait represents the content of HTTP requests and responses. Bodies can be in-memory chunks, streams, files, or structured data like JSON.
+
+## Body Types
+
+ZIO HTTP supports several body types:
+
+- **Empty** - No content
+- **String** - Text content
+- **Bytes** - Binary data (Array or Chunk)
+- **Stream** - Streaming content
+- **File** - File content
+- **Form** - Form data (URL-encoded or multipart)
+- **JSON** - Structured data
+
+## Creating Bodies
+
+### Empty Body
+
+```scala
+import zio.http._
+
+val emptyBody: Body = Body.empty
+```
+
+### String Body
+
+```scala
+val textBody = Body.fromString("Hello, World!")
+
+// With custom charset
+val utf16Body = Body.fromString("Hello!", Charsets.Utf16)
+
+// From CharSequence
+val charSeqBody = Body.fromCharSequence("Some text")
+```
+
+### Byte Body
+
+```scala
+import zio._
+
+// From byte array
+val arrayBody = Body.fromArray(Array[Byte](1, 2, 3, 4))
+
+// From Chunk
+val chunkBody = Body.fromChunk(Chunk[Byte](1, 2, 3, 4))
+
+// With media type
+val imageBody = Body.fromChunk(
+  imageBytes,
+  MediaType.image.png
+)
+```
+
+### File Body
+
+```scala
+import zio._
+import java.io.File
+
+// From file
+val fileBody: ZIO[Any, Nothing, Body] = 
+  Body.fromFile(new File("/path/to/file.txt"))
+
+// With custom chunk size
+val largeFileBody = 
+  Body.fromFile(new File("/large/file.bin"), chunkSize = 8192)
+
+// File range (for partial content/range requests)
+val rangeBody = Body.fromFileRange(
+  file = new File("/path/to/file.txt"),
+  offset = 0L,
+  length = 1024L,
+  chunkSize = 4096
+)
+```
+
+### JSON Body
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+import zio.http._
+
+case class User(name: String, age: Int)
+object User {
+  implicit val schema: Schema[User] = DeriveSchema.gen[User]
+}
+
+val user = User("John Doe", 30)
+
+// Using zio-schema
+val jsonBody = Body.json(user)
+
+// Using zio-json
+import zio.json._
+
+case class Person(name: String, age: Int)
+object Person {
+  implicit val encoder: JsonEncoder[Person] = DeriveJsonEncoder.gen[Person]
+}
+
+val person = Person("Jane", 25)
+val jsonCodecBody = Body.jsonCodec(person)
+```
+
+## Reading Bodies
+
+### As String
+
+```scala
+import zio._
+import zio.http._
+
+val program: ZIO[Any, Throwable, String] = for {
+  body   <- ZIO.succeed(Body.fromString("Hello"))
+  text   <- body.asString
+} yield text
+
+// With custom charset
+val withCharset: Task[String] = body.asString(Charsets.Utf16)
+```
+
+### As Bytes
+
+```scala
+import zio._
+
+// As array
+val asArray: Task[Array[Byte]] = body.asArray
+
+// As chunk
+val asChunk: Task[Chunk[Byte]] = body.asChunk
+```
+
+### As Stream
+
+```scala
+import zio.stream._
+
+// Get streaming representation
+val stream: ZStream[Any, Throwable, Byte] = body.asStream
+
+// Process the stream
+val processed = stream
+  .via(ZPipeline.utf8Decode)
+  .runFold("")(_ ++ _)
+```
+
+### As JSON
+
+```scala
+import zio._
+import zio.schema.{DeriveSchema, Schema}
+
+case class User(name: String, age: Int)
+object User {
+  implicit val schema: Schema[User] = DeriveSchema.gen[User]
+}
+
+// Decode using zio-schema
+val decodeJson: Task[User] = body.asJson[User]
+
+// Decode using zio-json
+import zio.json._
+
+case class Person(name: String, age: Int)
+object Person {
+  implicit val decoder: JsonDecoder[Person] = DeriveJsonDecoder.gen[Person]
+}
+
+val decodePerson: Task[Person] = body.asJsonFromCodec[Person]
+```
+
+### Using Binary Codec
+
+```scala
+import zio.schema.codec.BinaryCodec
+import zio.schema.codec.ProtobufCodec._
+
+case class Message(id: Int, text: String)
+object Message {
+  implicit val schema: Schema[Message] = DeriveSchema.gen[Message]
+}
+
+// Encode
+val encoded: Body = Body.from(Message(1, "Hello"))
+
+// Decode
+val decoded: Task[Message] = body.to[Message]
+```
+
+## Streaming Bodies
+
+### Creating Streaming Bodies
+
+```scala
+import zio._
+import zio.stream._
+
+// From stream with known length
+val streamBody = Body.fromStream(
+  ZStream.fromIterable("Hello World".getBytes),
+  contentLength = 11L
+)
+
+// Chunked transfer (unknown length)
+val chunkedBody = Body.fromStreamChunked(
+  ZStream.fromIterable("Hello World".getBytes)
+)
+
+// With environment dependency
+val envBody: RIO[MyEnv, Body] = 
+  Body.fromStreamChunkedEnv[MyEnv](myStream)
+```
+
+### Streaming Text
+
+```scala
+import zio.stream._
+
+val textStream: ZStream[Any, Throwable, CharSequence] = 
+  ZStream("Line 1", "Line 2", "Line 3")
+
+// With known length
+val streamingText = Body.fromCharSequenceStream(
+  textStream,
+  contentLength = 20L
+)
+
+// Chunked
+val chunkedText = Body.fromCharSequenceStreamChunked(textStream)
+```
+
+### Server-Sent Events
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+import zio.http._
+
+case class Event(data: String, timestamp: Long)
+object Event {
+  implicit val schema: Schema[Event] = DeriveSchema.gen[Event]
+}
+
+// Create SSE stream from body
+val events: ZStream[Any, Throwable, ServerSentEvent[Event]] = 
+  body.asServerSentEvents[Event]
+```
+
+## Content Type
+
+### Setting Content Type
+
+```scala
+import zio.http._
+
+// Set media type
+val jsonBody = Body.fromString("{}")
+  .contentType(MediaType.application.json)
+
+// With boundary (for multipart)
+val multipartBody = formBody
+  .contentType(MediaType.multipart.`form-data`, boundary)
+
+// Using ContentType
+val withContentType = body.contentType(
+  Body.ContentType(
+    mediaType = MediaType.application.json,
+    charset = Some(Charsets.Utf8)
+  )
+)
+```
+
+### Reading Content Type
+
+```scala
+// Get content type
+val contentType: Option[Body.ContentType] = body.contentType
+
+// Get media type
+val mediaType: Option[MediaType] = body.mediaType
+
+// Get known content length
+val length: Option[Long] = body.knownContentLength
+```
+
+## Body Properties
+
+### Check Body State
+
+```scala
+// Is empty?
+val empty: Boolean = body.isEmpty
+
+// Is complete (fully read)?
+val complete: Boolean = body.isComplete
+
+// Known content length
+val length: Option[Long] = body.knownContentLength
+```
+
+## Request Bodies
+
+### Reading Request Body
+
+```scala
+import zio.http._
+
+val app = Routes(
+  Method.POST / "api" / "users" -> handler { (req: Request) =>
+    for {
+      bodyText <- req.body.asString
+      _        <- ZIO.logInfo(s"Received: $bodyText")
+    } yield Response.ok
+  }
+).toHttpApp
+```
+
+### JSON Request Body
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+import zio.http._
+
+case class CreateUser(name: String, email: String)
+object CreateUser {
+  implicit val schema: Schema[CreateUser] = DeriveSchema.gen[CreateUser]
+}
+
+val app = Routes(
+  Method.POST / "api" / "users" -> handler { (req: Request) =>
+    for {
+      user <- req.body.asJson[CreateUser]
+      _    <- ZIO.logInfo(s"Creating user: ${user.name}")
+    } yield Response.text(s"Created user ${user.name}")
+  }
+).toHttpApp
+```
+
+### File Upload
+
+```scala
+import zio.http._
+
+val app = Routes(
+  Method.POST / "upload" -> handler { (req: Request) =>
+    for {
+      bytes <- req.body.asArray
+      _     <- saveFile(bytes) // Your file saving logic
+    } yield Response.text(s"Uploaded ${bytes.length} bytes")
+  }
+).toHttpApp
+```
+
+## Response Bodies
+
+### Text Response
+
+```scala
+import zio.http._
+
+val response = Response.text("Hello, World!")
+```
+
+### JSON Response
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+
+case class ApiResponse(success: Boolean, message: String)
+object ApiResponse {
+  implicit val schema: Schema[ApiResponse] = DeriveSchema.gen[ApiResponse]
+}
+
+val response = Response(
+  body = Body.json(ApiResponse(true, "Success"))
+)
+```
+
+### File Download
+
+```scala
+import java.io.File
+import zio.http._
+
+val fileResponse: ZIO[Any, Nothing, Response] = 
+  Body.fromFile(new File("/path/to/file.pdf")).map { body =>
+    Response(
+      body = body.contentType(MediaType.application.pdf)
+    ).addHeader(
+      "Content-Disposition",
+      "attachment; filename=\"document.pdf\""
+    )
+  }
+```
+
+### Streaming Response
+
+```scala
+import zio.stream._
+import zio.http._
+
+val dataStream: ZStream[Any, Throwable, String] = 
+  ZStream.fromIterable(1 to 1000).map(i => s"Line $i\n")
+
+val response = Response(
+  body = Body.fromCharSequenceStreamChunked(dataStream)
+)
+```
+
+## Body Materialization
+
+### Materialize Streaming Body
+
+Convert a streaming body into an in-memory body:
+
+```scala
+import zio._
+
+// Materialize body into memory
+val materialized: UIO[Body] = body.materialize
+```
+
+<Warning>
+  Be careful materializing large streaming bodies as they will be loaded entirely into memory.
+</Warning>
+
+## Best Practices
+
+<Tip>
+  Use streaming bodies for large files or data to avoid loading everything into memory.
+</Tip>
+
+<Tip>
+  Always set the correct `Content-Type` header for better client compatibility.
+</Tip>
+
+### Pattern: Streaming Large Files
+
+```scala
+import java.io.File
+import zio.http._
+
+def streamFile(file: File): ZIO[Any, Nothing, Response] =
+  Body.fromFile(file, chunkSize = 8192).map { body =>
+    Response(
+      body = body.contentType(MediaType.application.`octet-stream`)
+    )
+  }
+```
+
+### Pattern: JSON API Response
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+import zio.http._
+
+case class ApiResponse[T](success: Boolean, data: Option[T], error: Option[String])
+object ApiResponse {
+  implicit def schema[T: Schema]: Schema[ApiResponse[T]] = DeriveSchema.gen
+}
+
+def successResponse[T: Schema](data: T): Response =
+  Response(
+    body = Body.json(ApiResponse(success = true, data = Some(data), error = None))
+  )
+
+def errorResponse(message: String): Response =
+  Response(
+    status = Status.BadRequest,
+    body = Body.json(ApiResponse[String](success = false, data = None, error = Some(message)))
+  )
+```

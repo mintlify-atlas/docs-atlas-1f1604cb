@@ -1,0 +1,421 @@
+---
+title: 'Endpoint'
+description: 'Type-safe API endpoint definition with automatic OpenAPI generation'
+---
+
+## Overview
+
+An `Endpoint` represents a complete API endpoint specification for the HTTP protocol, including:
+- Route pattern (path with parameters)
+- Input codecs (headers, query params, request body)
+- Output codecs (response body, status codes)
+- Error codecs (error responses)
+- Authentication requirements
+- Documentation metadata
+
+Endpoints are purely declarative and can be used to generate OpenAPI documentation, type-safe clients, and server implementations.
+
+## Type Signature
+
+```scala
+final case class Endpoint[
+  PathInput,
+  Input,
+  Err,
+  Output,
+  Auth <: AuthType
+](
+  route: RoutePattern[PathInput],
+  input: HttpCodec[HttpCodecType.RequestType, Input],
+  output: HttpCodec[HttpCodecType.ResponseType, Output],
+  error: HttpCodec[HttpCodecType.ResponseType, Err],
+  codecError: HttpCodec[HttpCodecType.ResponseType, HttpCodecError],
+  documentation: Doc,
+  authType: Auth
+)
+```
+
+### Type Parameters
+
+<ParamField path="PathInput" type="type">
+  Type of path parameters extracted from the route pattern
+</ParamField>
+
+<ParamField path="Input" type="type">
+  Combined input type from query params, headers, and request body
+</ParamField>
+
+<ParamField path="Err" type="type">
+  Error type that the endpoint can return
+</ParamField>
+
+<ParamField path="Output" type="type">
+  Success response type
+</ParamField>
+
+<ParamField path="Auth" type="AuthType">
+  Authentication type (e.g., `AuthType.None`, `AuthType.Bearer`, `AuthType.Basic`)
+</ParamField>
+
+## Construction
+
+### Basic Endpoint
+
+```scala
+import zio.http.endpoint._
+import zio.http._
+
+// GET /users/:userId
+val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+```
+
+## Core Methods
+
+### Input Specification
+
+#### in
+
+Add request body with content type negotiation.
+
+```scala
+def in[Input2: HttpContentCodec](
+  implicit combiner: Combiner[Input, Input2]
+): Endpoint[PathInput, combiner.Out, Err, Output, Auth]
+```
+
+<Tabs>
+  <Tab title="Usage">
+    ```scala
+    case class CreateUser(name: String, email: String)
+    
+    val endpoint = Endpoint(Method.POST / "users")
+      .in[CreateUser]
+    ```
+  </Tab>
+  <Tab title="With Documentation">
+    ```scala
+    val endpoint = Endpoint(Method.POST / "users")
+      .in[CreateUser](Doc.p("User creation payload"))
+    ```
+  </Tab>
+  <Tab title="Custom Media Type">
+    ```scala
+    val endpoint = Endpoint(Method.POST / "users")
+      .in[CreateUser](MediaType.application.json)
+    ```
+  </Tab>
+</Tabs>
+
+#### query
+
+Add query parameters to the endpoint.
+
+```scala
+def query[A](name: String)(
+  implicit schema: Schema[A],
+  combiner: Combiner[Input, A]
+): Endpoint[PathInput, combiner.Out, Err, Output, Auth]
+```
+
+```scala
+val endpoint = Endpoint(Method.GET / "users")
+  .query[Int]("page")
+  .query[Int]("pageSize")
+```
+
+#### header
+
+Add required headers to the endpoint.
+
+```scala
+def header[A](name: String)(
+  implicit schema: Schema[A],
+  combiner: Combiner[Input, A]
+): Endpoint[PathInput, combiner.Out, Err, Output, Auth]
+```
+
+```scala
+val endpoint = Endpoint(Method.GET / "users")
+  .header[String]("X-Request-ID")
+```
+
+### Output Specification
+
+#### out
+
+Define success response type.
+
+```scala
+def out[Output2: HttpContentCodec](
+  implicit alt: Alternator[Output2, Output]
+): Endpoint[PathInput, Input, Err, alt.Out, Auth]
+```
+
+<Tabs>
+  <Tab title="Basic">
+    ```scala
+    case class User(id: Int, name: String, email: String)
+    
+    val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+      .out[User]
+    ```
+  </Tab>
+  <Tab title="Custom Status">
+    ```scala
+    val endpoint = Endpoint(Method.POST / "users")
+      .in[CreateUser]
+      .out[User](Status.Created)
+    ```
+  </Tab>
+  <Tab title="Multiple Responses">
+    ```scala
+    val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+      .out[User](Status.Ok)
+      .out[Unit](Status.NoContent)
+    ```
+  </Tab>
+</Tabs>
+
+#### outStream
+
+Define streaming response.
+
+```scala
+def outStream[Output2: HttpContentCodec](
+  implicit alt: Alternator[ZStream[Any, Nothing, Output2], Output]
+): Endpoint[PathInput, Input, Err, alt.Out, Auth]
+```
+
+```scala
+val endpoint = Endpoint(Method.GET / "logs")
+  .outStream[String]
+```
+
+### Error Handling
+
+#### outError
+
+Define error response type.
+
+```scala
+def outError[Err2: HttpContentCodec](status: Status)(
+  implicit alt: Alternator[Err2, Err]
+): Endpoint[PathInput, Input, alt.Out, Output, Auth]
+```
+
+```scala
+case class NotFoundError(message: String)
+case class BadRequestError(message: String)
+
+val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+  .out[User]
+  .outError[NotFoundError](Status.NotFound)
+  .outError[BadRequestError](Status.BadRequest)
+```
+
+### Implementation
+
+#### implement
+
+Implement endpoint with an effectful handler.
+
+```scala
+def implement[Env](f: Input => ZIO[Env, Err, Output])(
+  implicit trace: Trace
+): Route[Env, Nothing]
+```
+
+```scala
+val getUserEndpoint = Endpoint(Method.GET / "users" / int("userId"))
+  .out[User]
+  .outError[NotFoundError](Status.NotFound)
+  .implement { userId =>
+    UserService.getUser(userId)
+      .mapError(e => NotFoundError(e.getMessage))
+  }
+```
+
+#### implementPurely
+
+Implement endpoint with a pure function.
+
+```scala
+def implementPurely(f: Input => Output)(
+  implicit trace: Trace
+): Route[Any, Nothing]
+```
+
+```scala
+val echoEndpoint = Endpoint(Method.POST / "echo")
+  .in[String]
+  .out[String]
+  .implementPurely(identity)
+```
+
+#### implementHandler
+
+Implement endpoint with a custom handler.
+
+```scala
+def implementHandler[Env](handler: Handler[Env, Err, Input, Output])(
+  implicit trace: Trace
+): Route[Env, Nothing]
+```
+
+### Documentation
+
+#### ??
+
+Add documentation to the endpoint.
+
+```scala
+val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+  .out[User]
+  ?? Doc.p("Retrieve a user by ID")
+```
+
+#### tag
+
+Add tags for grouping in OpenAPI documentation.
+
+```scala
+val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+  .out[User]
+  .tag("Users", "Public")
+```
+
+### Transformation
+
+#### transformIn
+
+Transform the input type using bidirectional functions.
+
+```scala
+def transformIn[Input1](f: Input => Input1)(
+  g: Input1 => Input
+): Endpoint[PathInput, Input1, Err, Output, Auth]
+```
+
+```scala
+case class UserId(value: Int)
+case class GetUserRequest(userId: UserId)
+
+val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+  .transformIn { userId => GetUserRequest(UserId(userId)) } {
+    case GetUserRequest(UserId(id)) => id
+  }
+```
+
+#### transformOut
+
+Transform the output type.
+
+```scala
+def transformOut[Output1](f: Output => Output1)(
+  g: Output1 => Output
+): Endpoint[PathInput, Input, Err, Output1, Auth]
+```
+
+### Authentication
+
+#### auth
+
+Add authentication requirements.
+
+```scala
+val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+  .out[User]
+  .auth(AuthType.Bearer)
+```
+
+#### scopes
+
+Add OAuth scopes.
+
+```scala
+val endpoint = Endpoint(Method.DELETE / "users" / int("userId"))
+  .out[Unit]
+  .auth(AuthType.Bearer)
+  .scopes("users:delete")
+```
+
+## URL Generation
+
+### url
+
+Generate a URL for the endpoint.
+
+```scala
+def url(basePath: String, values: PathInput): Either[Exception, URL]
+```
+
+```scala
+val endpoint = Endpoint(Method.GET / "users" / int("userId"))
+
+val url = endpoint.url("https://api.example.com", 42)
+// Right(https://api.example.com/users/42)
+```
+
+### urlRelative
+
+Generate a relative URL.
+
+```scala
+def urlRelative(values: PathInput): Either[Exception, URL]
+```
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+import zio.http.endpoint._
+import zio.schema.{DeriveSchema, Schema}
+
+case class User(id: Int, name: String, email: String)
+object User {
+  implicit val schema: Schema[User] = DeriveSchema.gen[User]
+}
+
+case class CreateUser(name: String, email: String)
+object CreateUser {
+  implicit val schema: Schema[CreateUser] = DeriveSchema.gen[CreateUser]
+}
+
+case class NotFoundError(message: String)
+object NotFoundError {
+  implicit val schema: Schema[NotFoundError] = DeriveSchema.gen[NotFoundError]
+}
+
+// GET /users/:userId
+val getUserEndpoint = Endpoint(Method.GET / "users" / int("userId"))
+  .out[User](Doc.p("User details"))
+  .outError[NotFoundError](Status.NotFound)
+  .tag("Users")
+  ?? Doc.p("Retrieve a user by their ID")
+
+// POST /users
+val createUserEndpoint = Endpoint(Method.POST / "users")
+  .in[CreateUser](Doc.p("User to create"))
+  .out[User](Status.Created, Doc.p("Created user"))
+  .tag("Users")
+  ?? Doc.p("Create a new user")
+
+// Implementation
+val getUserRoute = getUserEndpoint.implement { userId =>
+  UserService.getUser(userId)
+    .mapError(e => NotFoundError(e.getMessage))
+}
+
+val createUserRoute = createUserEndpoint.implement { createUser =>
+  UserService.createUser(createUser.name, createUser.email)
+}
+
+val routes = getUserRoute ++ createUserRoute
+```
+
+## See Also
+
+- [Codec](/api/codec) - HTTP codec system
+- [Routes](/core/routes) - Route composition
+- [Handler](/core/handler) - Request handlers

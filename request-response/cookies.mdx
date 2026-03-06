@@ -1,0 +1,532 @@
+---
+title: Cookies
+description: Managing HTTP cookies in ZIO HTTP
+---
+
+Cookies are used to store data on the client side. ZIO HTTP provides type-safe cookie handling with separate types for request and response cookies.
+
+## Cookie Types
+
+ZIO HTTP has two cookie types:
+
+- **`Cookie.Request`** - Cookies sent from client to server
+- **`Cookie.Response`** - Cookies sent from server to client
+
+## Creating Cookies
+
+### Request Cookies
+
+```scala
+import zio.http._
+
+val requestCookie = Cookie.Request(
+  name = "session_id",
+  content = "abc123xyz"
+)
+```
+
+### Response Cookies
+
+```scala
+import zio.http._
+import zio._
+
+val responseCookie = Cookie.Response(
+  name = "session_id",
+  content = "abc123xyz",
+  maxAge = Some(1.hour),
+  path = Some(Path.root),
+  isSecure = true,
+  isHttpOnly = true
+)
+```
+
+### Full Response Cookie Options
+
+```scala
+import zio.http._
+import zio._
+
+val fullCookie = Cookie.Response(
+  name = "user_prefs",
+  content = "theme=dark;lang=en",
+  domain = Some("example.com"),
+  path = Some(Path.root / "app"),
+  isSecure = true,
+  isHttpOnly = true,
+  maxAge = Some(7.days),
+  sameSite = Some(Cookie.SameSite.Strict)
+)
+```
+
+## Cookie Attributes
+
+### Domain
+
+Specifies which hosts can receive the cookie:
+
+```scala
+val cookie = Cookie.Response(
+  name = "token",
+  content = "value",
+  domain = Some("api.example.com")
+)
+```
+
+### Path
+
+Specifies the URL path that must exist in the requested URL:
+
+```scala
+val cookie = Cookie.Response(
+  name = "admin_session",
+  content = "xyz",
+  path = Some(Path.root / "admin")
+)
+```
+
+### Secure Flag
+
+Sends cookie only over HTTPS:
+
+```scala
+val secureCookie = Cookie.Response(
+  name = "auth_token",
+  content = "secret",
+  isSecure = true  // Only sent over HTTPS
+)
+```
+
+### HttpOnly Flag
+
+Prevents JavaScript access to the cookie:
+
+```scala
+val httpOnlyCookie = Cookie.Response(
+  name = "session",
+  content = "value",
+  isHttpOnly = true  // Not accessible via JavaScript
+)
+```
+
+### Max Age
+
+Specifies cookie lifetime:
+
+```scala
+import zio._
+
+// Session cookie (expires when browser closes)
+val sessionCookie = Cookie.Response(
+  name = "temp",
+  content = "value"
+  // No maxAge specified
+)
+
+// Persistent cookie
+val persistentCookie = Cookie.Response(
+  name = "remember_me",
+  content = "value",
+  maxAge = Some(30.days)
+)
+
+// Delete cookie by setting maxAge to zero
+val deleteCookie = Cookie.Response(
+  name = "old_cookie",
+  content = "",
+  maxAge = Some(Duration.Zero)
+)
+```
+
+### SameSite
+
+Controls cross-site request behavior:
+
+```scala
+import zio.http.Cookie.SameSite
+
+// Strict: Cookie only sent in first-party context
+val strictCookie = Cookie.Response(
+  name = "session",
+  content = "value",
+  sameSite = Some(SameSite.Strict)
+)
+
+// Lax: Cookie sent with top-level navigation
+val laxCookie = Cookie.Response(
+  name = "tracking",
+  content = "value",
+  sameSite = Some(SameSite.Lax)
+)
+
+// None: Cookie sent with all requests (requires Secure)
+val noneCookie = Cookie.Response(
+  name = "api_token",
+  content = "value",
+  isSecure = true,
+  sameSite = Some(SameSite.None)
+)
+```
+
+## Reading Cookies
+
+### From Requests
+
+```scala
+import zio.http._
+
+val app = Routes(
+  Method.GET / "profile" -> handler { (req: Request) =>
+    // Get cookie from request headers
+    val sessionCookie = req.headers.get(Header.Cookie) match {
+      case Some(cookies) => 
+        cookies.value.find(_.name == "session_id")
+      case None => 
+        None
+    }
+    
+    sessionCookie match {
+      case Some(cookie) =>
+        Response.text(s"Session: ${cookie.content}")
+      case None =>
+        Response.text("No session found")
+    }
+  }
+).toHttpApp
+```
+
+### Helper Method for Request Cookies
+
+```scala
+import zio.http._
+
+def getCookie(req: Request, name: String): Option[Cookie.Request] = {
+  req.headers.get(Header.Cookie)
+    .flatMap(_.value.find(_.name == name))
+}
+
+val app = Routes(
+  Method.GET / "api" / "data" -> handler { (req: Request) =>
+    getCookie(req, "auth_token") match {
+      case Some(cookie) =>
+        // Validate and use cookie
+        Response.ok
+      case None =>
+        Response.unauthorized
+    }
+  }
+).toHttpApp
+```
+
+## Setting Cookies
+
+### In Responses
+
+```scala
+import zio.http._
+import zio._
+
+val response = Response.ok
+  .addHeader(
+    Header.SetCookie(
+      Cookie.Response(
+        name = "session_id",
+        content = "new-session-123",
+        maxAge = Some(1.hour),
+        isHttpOnly = true,
+        isSecure = true
+      )
+    )
+  )
+```
+
+### Multiple Cookies
+
+```scala
+import zio.http._
+import zio._
+
+val response = Response.ok
+  .addHeader(
+    Header.SetCookie(
+      Cookie.Response(
+        name = "session",
+        content = "session123",
+        maxAge = Some(1.hour)
+      )
+    )
+  )
+  .addHeader(
+    Header.SetCookie(
+      Cookie.Response(
+        name = "preferences",
+        content = "theme=dark",
+        maxAge = Some(30.days)
+      )
+    )
+  )
+```
+
+## Cookie Operations
+
+### Converting Cookie Types
+
+```scala
+import zio.http._
+
+val requestCookie = Cookie.Request("token", "value123")
+
+// Convert request cookie to response cookie
+val responseCookie = requestCookie.toResponse(
+  maxAge = Some(1.hour),
+  isSecure = true,
+  isHttpOnly = true
+)
+
+// Convert response cookie to request cookie
+val backToRequest = responseCookie.toRequest
+```
+
+### Modifying Cookies
+
+```scala
+val original = Cookie.Response("session", "value")
+
+// Update content
+val updated = original.content("new-value")
+
+// Update name
+val renamed = original.name("new-session")
+```
+
+## Encoding and Decoding
+
+### Encode Cookies
+
+```scala
+import zio.http._
+
+val cookie = Cookie.Response(
+  name = "session",
+  content = "value123"
+)
+
+// Encode to string
+val encoded: Either[Exception, String] = cookie.encode
+```
+
+### Decode Request Cookies
+
+```scala
+import zio._
+
+val cookieHeader = "session=value123; token=abc456"
+
+val cookies: Either[Exception, Chunk[Cookie.Request]] = 
+  Cookie.decodeRequest(cookieHeader)
+```
+
+### Decode Response Cookie
+
+```scala
+val setCookieHeader = "session=value123; Path=/; HttpOnly; Secure"
+
+val cookie: Either[Exception, Cookie.Response] = 
+  Cookie.decodeResponse(setCookieHeader)
+```
+
+## Signed Cookies
+
+### Signing Cookies
+
+```scala
+import zio.http._
+
+val secret = "my-secret-key-keep-it-safe"
+
+val cookie = Cookie.Response(
+  name = "user_id",
+  content = "12345"
+)
+
+// Sign the cookie
+val signedCookie = cookie.sign(secret)
+// Content becomes: "12345.<signature>"
+```
+
+### Verifying Signed Cookies
+
+```scala
+import zio.http._
+
+val secret = "my-secret-key-keep-it-safe"
+
+// From request
+val requestCookie = Cookie.Request(
+  name = "user_id",
+  content = "12345.<signature>"
+)
+
+// Verify and extract original value
+val verified: Option[Cookie.Request] = requestCookie.unSign(secret)
+// Returns Some(Cookie.Request("user_id", "12345")) if valid
+// Returns None if signature is invalid
+```
+
+## Common Patterns
+
+### Session Management
+
+```scala
+import zio.http._
+import zio._
+
+case class Session(id: String, userId: Int, expiresAt: Long)
+
+def createSession(userId: Int): ZIO[Any, Nothing, Cookie.Response] = {
+  for {
+    sessionId <- Random.nextUUID.map(_.toString)
+  } yield Cookie.Response(
+    name = "session",
+    content = sessionId,
+    maxAge = Some(24.hours),
+    isHttpOnly = true,
+    isSecure = true,
+    sameSite = Some(Cookie.SameSite.Strict)
+  )
+}
+
+val loginRoute = Routes(
+  Method.POST / "login" -> handler { (req: Request) =>
+    for {
+      // Validate credentials...
+      sessionCookie <- createSession(userId = 123)
+      response      <- ZIO.succeed(
+        Response.ok
+          .addHeader(Header.SetCookie(sessionCookie))
+      )
+    } yield response
+  }
+).toHttpApp
+```
+
+### Logout (Clear Cookie)
+
+```scala
+import zio.http._
+import zio._
+
+val logoutRoute = Routes(
+  Method.POST / "logout" -> handler { (req: Request) =>
+    ZIO.succeed(
+      Response.ok
+        .addHeader(
+          Header.SetCookie(
+            Cookie.clear("session")
+          )
+        )
+    )
+  }
+).toHttpApp
+```
+
+### Remember Me Cookie
+
+```scala
+import zio.http._
+import zio._
+
+def createRememberMeCookie(userId: Int): Cookie.Response = {
+  Cookie.Response(
+    name = "remember_me",
+    content = userId.toString,
+    maxAge = Some(30.days),
+    isHttpOnly = true,
+    isSecure = true,
+    sameSite = Some(Cookie.SameSite.Strict)
+  )
+}
+```
+
+### CSRF Token Cookie
+
+```scala
+import zio.http._
+import zio._
+
+def createCsrfCookie: ZIO[Any, Nothing, Cookie.Response] = {
+  Random.nextUUID.map { uuid =>
+    Cookie.Response(
+      name = "csrf_token",
+      content = uuid.toString,
+      isSecure = true,
+      sameSite = Some(Cookie.SameSite.Strict)
+      // Not HttpOnly so JavaScript can read it
+    )
+  }
+}
+```
+
+### Locale/Preferences Cookie
+
+```scala
+import zio.http._
+import zio._
+
+val localeRoute = Routes(
+  Method.POST / "set-locale" -> handler { (req: Request) =>
+    for {
+      locale <- req.body.asString
+      cookie = Cookie.Response(
+        name = "locale",
+        content = locale,
+        maxAge = Some(365.days),
+        path = Some(Path.root)
+      )
+    } yield Response.ok.addHeader(Header.SetCookie(cookie))
+  }
+).toHttpApp
+```
+
+## Best Practices
+
+<Warning>
+  Always use `Secure` and `HttpOnly` flags for sensitive cookies like session tokens.
+</Warning>
+
+<Tip>
+  Use `SameSite.Strict` or `SameSite.Lax` to protect against CSRF attacks.
+</Tip>
+
+<Tip>
+  Sign sensitive cookies to prevent tampering. Store signing secrets securely.
+</Tip>
+
+### Security Checklist
+
+1. **Sensitive Data**: Set `isHttpOnly = true` and `isSecure = true`
+2. **CSRF Protection**: Use `sameSite = Some(SameSite.Strict)`
+3. **Scope Cookies**: Set appropriate `domain` and `path`
+4. **Expiration**: Always set `maxAge` for persistent cookies
+5. **Signing**: Sign cookies containing sensitive data
+
+### Pattern: Cookie Middleware
+
+```scala
+import zio.http._
+import zio._
+
+def requireSession = Middleware.customAuthZIO { (req: Request) =>
+  val sessionCookie = req.headers.get(Header.Cookie)
+    .flatMap(_.value.find(_.name == "session"))
+  
+  sessionCookie match {
+    case Some(cookie) => 
+      validateSession(cookie.content).map(Some(_))
+    case None => 
+      ZIO.none
+  }
+}
+
+def validateSession(sessionId: String): ZIO[Any, Nothing, Session] = ???
+```

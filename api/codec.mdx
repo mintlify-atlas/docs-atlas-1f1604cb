@@ -1,0 +1,438 @@
+---
+title: 'Codec'
+description: 'Type-safe HTTP codec system for encoding and decoding requests and responses'
+---
+
+## Overview
+
+The codec system in ZIO HTTP provides type-safe, bidirectional conversion between HTTP messages and Scala types. Codecs are purely declarative and can be composed to build complex protocols.
+
+## HttpCodec
+
+The core trait representing a codec for any part of an HTTP message.
+
+```scala
+sealed trait HttpCodec[-AtomTypes, Value]
+```
+
+### Type Parameters
+
+<ParamField path="AtomTypes" type="type">
+  The types of atoms this codec can handle (e.g., `HttpCodecType.Path`, `HttpCodecType.Query`, `HttpCodecType.Header`, `HttpCodecType.Content`)
+</ParamField>
+
+<ParamField path="Value" type="type">
+  The Scala type this codec encodes/decodes
+</ParamField>
+
+### Core Methods
+
+#### ++
+
+Combine two codecs sequentially.
+
+```scala
+def ++[AtomTypes1 <: AtomTypes, Value2](that: HttpCodec[AtomTypes1, Value2])(
+  implicit combiner: Combiner[Value, Value2]
+): HttpCodec[AtomTypes1, combiner.Out]
+```
+
+```scala
+import zio.http.codec._
+
+val codec = HeaderCodec.accept ++ QueryCodec.query[Int]("page")
+// Type: HttpCodec[Header with Query, (MediaTypeWithQFactor, Int)]
+```
+
+#### |
+
+Create an alternative codec (fallback).
+
+```scala
+def |[AtomTypes1 <: AtomTypes, Value2](that: HttpCodec[AtomTypes1, Value2])(
+  implicit alternator: Alternator[Value, Value2]
+): HttpCodec[AtomTypes1, alternator.Out]
+```
+
+```scala
+val codec = StatusCodec.Ok | StatusCodec.Created
+// Matches either 200 or 201 status
+```
+
+#### transform
+
+Bidirectionally transform the codec's value type.
+
+```scala
+def transform[Value2](f: Value => Value2)(g: Value2 => Value): HttpCodec[AtomTypes, Value2]
+```
+
+```scala
+val stringCodec = QueryCodec.query[Int]("id")
+  .transform(_.toString)(_.toInt)
+```
+
+#### transformOrFail
+
+Transform with potential failure.
+
+```scala
+def transformOrFail[Value2](
+  f: Value => Either[String, Value2]
+)(g: Value2 => Either[String, Value]): HttpCodec[AtomTypes, Value2]
+```
+
+```scala
+case class UserId(value: Int)
+
+val codec = QueryCodec.query[Int]("userId")
+  .transformOrFail { id =>
+    if (id > 0) Right(UserId(id))
+    else Left("User ID must be positive")
+  } { userId =>
+    Right(userId.value)
+  }
+```
+
+## HttpContentCodec
+
+Specialized codec for request and response bodies with content negotiation.
+
+```scala
+sealed trait HttpContentCodec[A] {
+  def choices: ListMap[MediaType, BinaryCodecWithSchema[A]]
+}
+```
+
+### Automatic Derivation
+
+```scala
+import zio.schema.{DeriveSchema, Schema}
+
+case class User(id: Int, name: String, email: String)
+object User {
+  implicit val schema: Schema[User] = DeriveSchema.gen[User]
+  // HttpContentCodec[User] is automatically available
+}
+```
+
+### Content Type Selection
+
+```scala
+import zio.http.codec._
+
+val jsonOnly = HttpContentCodec.json.only[User]
+val protobufOnly = HttpContentCodec.protobuf.only[User]
+val textOnly = HttpContentCodec.text.only[User]
+
+// Multiple formats with preference order
+val multiFormat = jsonOnly ++ protobufOnly
+```
+
+### Encoding and Decoding
+
+```scala
+import zio.http._
+
+val codec = HttpContentCodec.json.only[User]
+val user = User(1, "Alice", "alice@example.com")
+
+// Encode to body
+val body: Either[String, Body] = codec.encode(user)
+
+// Decode from request
+val decoded: Task[User] = codec.decodeRequest(request)
+```
+
+## PathCodec
+
+Codec for URL path segments with typed parameter extraction.
+
+### Basic Path Codecs
+
+```scala
+import zio.http.codec.PathCodec._
+
+val literal = path("users")  // Matches "users" literally
+val intParam = int("userId") // Extracts Int parameter
+val stringParam = string("name") // Extracts String parameter
+val longParam = long("id")   // Extracts Long parameter
+val uuidParam = uuid("id")   // Extracts UUID parameter
+val boolParam = bool("flag") // Extracts Boolean parameter
+```
+
+### Path Composition
+
+```scala
+import zio.http.codec.PathCodec
+
+val path = PathCodec.empty / "users" / int("userId") / "posts" / string("postId")
+// Type: PathCodec[(Int, String)]
+
+val decoded = path.decode(Path("/users/42/posts/hello"))
+// Right((42, "hello"))
+```
+
+### Trailing Path
+
+```scala
+val path = PathCodec.empty / "files" / trailing
+// Captures: /files/documents/report.pdf -> Path("documents/report.pdf")
+```
+
+## QueryCodec
+
+Codec for URL query parameters.
+
+### Query Parameter Types
+
+<Tabs>
+  <Tab title="Required">
+    ```scala
+    import zio.http.codec.QueryCodec
+    
+    val pageCodec = QueryCodec.query[Int]("page")
+    // Requires ?page=1
+    ```
+  </Tab>
+  <Tab title="Optional">
+    ```scala
+    val pageCodec = QueryCodec.queryInt("page").optional
+    // Type: QueryCodec[Option[Int]]
+    ```
+  </Tab>
+  <Tab title="With Default">
+    ```scala
+    val pageCodec = QueryCodec.queryInt("page").optional
+      .transform(_.getOrElse(1))(Some(_))
+    ```
+  </Tab>
+  <Tab title="Multiple Values">
+    ```scala
+    val tagsCodec = QueryCodec.queryAll[String]("tag")
+    // Type: QueryCodec[Chunk[String]]
+    // Handles ?tag=scala&tag=zio&tag=http
+    ```
+  </Tab>
+</Tabs>
+
+### Built-in Query Codecs
+
+```scala
+import zio.http.codec.QueryCodec
+
+val intCodec = QueryCodec.queryInt("count")
+val stringCodec = QueryCodec.queryString("name")
+val boolCodec = QueryCodec.queryBool("active")
+val longCodec = QueryCodec.queryLong("timestamp")
+val uuidCodec = QueryCodec.queryUUID("id")
+```
+
+### Query Codec Composition
+
+```scala
+val paginationCodec = 
+  QueryCodec.queryInt("page") ++ QueryCodec.queryInt("pageSize")
+// Type: QueryCodec[(Int, Int)]
+```
+
+## HeaderCodec
+
+Codec for HTTP headers.
+
+### Standard Headers
+
+```scala
+import zio.http.codec.HeaderCodec
+
+val accept = HeaderCodec.accept
+val contentType = HeaderCodec.contentType
+val authorization = HeaderCodec.authorization
+val userAgent = HeaderCodec.userAgent
+val accept = HeaderCodec.accept
+```
+
+### Custom Headers
+
+```scala
+val customHeader = HeaderCodec.name[String]("X-Request-ID")
+val typedHeader = HeaderCodec.name[Int]("X-Retry-Count")
+```
+
+### Header Validation
+
+```scala
+val authHeader = HeaderCodec.authorization
+  .transformOrFail {
+    case Header.Authorization.Bearer(token) if token.nonEmpty => Right(token)
+    case _ => Left("Invalid bearer token")
+  } { token =>
+    Right(Header.Authorization.Bearer(token))
+  }
+```
+
+## StatusCodec
+
+Codec for HTTP status codes.
+
+```scala
+import zio.http.codec.StatusCodec
+
+val ok = StatusCodec.Ok              // 200
+val created = StatusCodec.Created    // 201
+val noContent = StatusCodec.NoContent // 204
+val badRequest = StatusCodec.BadRequest // 400
+val notFound = StatusCodec.NotFound  // 404
+val serverError = StatusCodec.InternalServerError // 500
+
+// Custom status
+val custom = StatusCodec.status(Status.Custom(418))
+```
+
+## ContentCodec
+
+Shorthand for content codecs.
+
+```scala
+import zio.http.codec.ContentCodec
+
+case class User(id: Int, name: String)
+
+// JSON content
+val jsonCodec = ContentCodec.content[User]
+
+// With custom media type
+val xmlCodec = ContentCodec.content[User](MediaType.application.xml)
+
+// Stream content
+val streamCodec = ContentCodec.contentStream[String]
+```
+
+## Codec Helpers
+
+### Combiner
+
+Type class for combining codec values into tuples.
+
+```scala
+import zio.http.codec.Combiner
+
+val codec1: HttpCodec[Query, Int] = QueryCodec.queryInt("page")
+val codec2: HttpCodec[Query, Int] = QueryCodec.queryInt("pageSize")
+
+val combined = codec1 ++ codec2
+// Type: HttpCodec[Query, (Int, Int)]
+```
+
+### Alternator
+
+Type class for creating alternatives (Either).
+
+```scala
+import zio.http.codec.Alternator
+
+val codec1: HttpCodec[Content, User] = ContentCodec.content[User]
+val codec2: HttpCodec[Content, Admin] = ContentCodec.content[Admin]
+
+val alternative = codec1 | codec2
+// Type: HttpCodec[Content, Either[User, Admin]]
+```
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+import zio.http.codec._
+import zio.schema.{DeriveSchema, Schema}
+
+case class SearchQuery(
+  term: String,
+  page: Int,
+  pageSize: Int,
+  sortBy: Option[String]
+)
+
+object SearchQuery {
+  implicit val schema: Schema[SearchQuery] = DeriveSchema.gen[SearchQuery]
+  
+  // Custom codec for search parameters
+  val codec: QueryCodec[SearchQuery] =
+    (QueryCodec.queryString("q") ++
+     QueryCodec.queryInt("page") ++
+     QueryCodec.queryInt("pageSize") ++
+     QueryCodec.queryString("sort").optional)
+      .transform { case (term, page, pageSize, sortBy) =>
+        SearchQuery(term, page, pageSize, sortBy)
+      } { query =>
+        (query.term, query.page, query.pageSize, query.sortBy)
+      }
+}
+
+case class SearchResult(total: Int, items: Chunk[String])
+object SearchResult {
+  implicit val schema: Schema[SearchResult] = DeriveSchema.gen[SearchResult]
+}
+
+// Use in endpoint
+val searchEndpoint = Endpoint(Method.GET / "search")
+  .query(SearchQuery.codec)
+  .out[SearchResult]
+  .implement { query =>
+    SearchService.search(query)
+  }
+```
+
+## Best Practices
+
+### 1. Use Schema-Derived Codecs
+
+Let ZIO Schema automatically derive codecs:
+
+```scala
+case class User(id: Int, name: String, email: String)
+object User {
+  implicit val schema: Schema[User] = DeriveSchema.gen[User]
+  // HttpContentCodec[User] is now available
+}
+```
+
+### 2. Validate Early
+
+Use `transformOrFail` for validation:
+
+```scala
+val emailCodec = QueryCodec.queryString("email")
+  .transformOrFail { email =>
+    if (email.contains("@")) Right(email)
+    else Left("Invalid email format")
+  }(Right(_))
+```
+
+### 3. Compose Codecs
+
+Build complex codecs from simple ones:
+
+```scala
+val paginationCodec = 
+  QueryCodec.queryInt("page") ++ 
+  QueryCodec.queryInt("pageSize")
+
+val searchCodec = 
+  QueryCodec.queryString("q") ++ 
+  paginationCodec
+```
+
+### 4. Document Codecs
+
+Add documentation for better API docs:
+
+```scala
+val codec = QueryCodec.queryString("q")
+  ?? Doc.p("Search term to query")
+```
+
+## See Also
+
+- [Endpoint](/api/endpoint) - Endpoint definition
+- [Schema](https://zio.dev/zio-schema/) - ZIO Schema documentation

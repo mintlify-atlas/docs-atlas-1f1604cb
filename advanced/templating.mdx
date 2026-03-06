@@ -1,0 +1,157 @@
+---
+title: HTML Templating
+description: Type-safe HTML generation with ZIO HTTP's built-in template DSL
+---
+
+ZIO HTTP provides a type-safe DSL for generating HTML templates directly in Scala code, eliminating the need for external template engines.
+
+## Overview
+
+The template system offers:
+
+- **Type Safety**: HTML structure checked at compile time
+- **No External Files**: Templates defined in Scala code
+- **Composable**: Build reusable components
+- **XSS Protection**: Automatic escaping of user content
+
+## Basic Templates
+
+Create HTML using the template DSL:
+
+```scala
+import zio.http._
+import zio.http.template._
+
+val homePage = html(
+  head(
+    title("My App"),
+    link(rel := "stylesheet", href := "/styles.css")
+  ),
+  body(
+    h1("Welcome"),
+    p("Hello, world!")
+  )
+)
+```
+
+## Returning Templates
+
+Return templates as responses:
+
+```scala
+val routes = Routes(
+  Method.GET / "home" -> handler {
+    Response.html(homePage)
+  }
+)
+```
+
+## Dynamic Content
+
+Generate dynamic content:
+
+```scala
+def userPage(user: User) = html(
+  head(title(s"Profile - ${user.name}")),
+  body(
+    h1(user.name),
+    p(s"Email: ${user.email}")
+  )
+)
+```
+
+## Lists and Iteration
+
+Generate lists from collections:
+
+```scala
+def userList(users: List[User]) = html(
+  body(
+    h1("Users"),
+    ul(
+      users.map { user =>
+        li(
+          a(href := s"/users/${user.id}", user.name)
+        )
+      }
+    )
+  )
+)
+```
+
+## Attributes
+
+Set HTML attributes:
+
+```scala
+val button = input(
+  typeAttr := "submit",
+  className := "btn btn-primary",
+  idAttr := "submit-btn",
+  disabled := true
+)
+```
+
+## Components
+
+Create reusable components:
+
+```scala
+def card(title: String, content: Dom) = div(
+  className := "card",
+  div(className := "card-header", h3(title)),
+  div(className := "card-body", content)
+)
+
+val page = html(
+  body(
+    card("Welcome", p("Hello!")),
+    card("About", p("Info here"))
+  )
+)
+```
+
+## Forms
+
+Create HTML forms:
+
+```scala
+def loginForm = form(
+  method := "POST",
+  action := "/login",
+  div(
+    label(forAttr := "username", "Username:"),
+    input(typeAttr := "text", name := "username", idAttr := "username")
+  ),
+  div(
+    label(forAttr := "password", "Password:"),
+    input(typeAttr := "password", name := "password", idAttr := "password")
+  ),
+  button(typeAttr := "submit", "Login")
+)
+```
+
+<Warning>
+User-provided content is automatically escaped to prevent XSS attacks. Never use raw HTML insertion unless you trust the source.
+</Warning>
+
+<Note>
+For complete API reference, see the [Template API](/api/template) page.
+</Note>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Template API" href="/api/template">
+    Complete template API reference
+  </Card>
+  <Card title="Response" href="/concepts/response">
+    Learn about responses
+  </Card>
+  <Card title="File Server Example" href="/examples/file-server">
+    Serving HTML pages
+  </Card>
+  <Card title="Forms" href="/request-response/forms">
+    Handling form submissions
+  </Card>
+</CardGroup>

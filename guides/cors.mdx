@@ -1,0 +1,475 @@
+---
+title: "CORS Configuration"
+description: "Configure Cross-Origin Resource Sharing (CORS) in ZIO HTTP to enable secure cross-domain requests"
+---
+
+Cross-Origin Resource Sharing (CORS) is a security feature that allows you to control which domains can access your API. ZIO HTTP provides flexible CORS middleware to handle preflight requests and configure access policies.
+
+## What is CORS?
+
+CORS is a browser security mechanism that restricts web pages from making requests to a different domain than the one serving the page. When a browser makes a cross-origin request, it first sends a preflight OPTIONS request to check if the actual request is allowed.
+
+### Why CORS Matters
+
+- **Security** - Prevents unauthorized domains from accessing your API
+- **Browser Enforcement** - Browsers automatically enforce CORS policies
+- **API Access Control** - Control which origins, methods, and headers are allowed
+
+<Info>
+CORS is enforced by browsers, not servers. Tools like curl or Postman bypass CORS restrictions.
+</Info>
+
+## Basic CORS Setup
+
+### Using Default CORS
+
+Enable CORS with default settings (allows all origins):
+
+```scala
+import zio._
+import zio.http._
+import zio.http.Middleware.cors
+
+val routes: Routes[Any, Response] = Routes(
+  Method.GET / "api" / "users" ->
+    handler(Response.json("""[{"id":1,"name":"Alice"}]""")),
+)
+
+// Apply CORS middleware
+val corsRoutes = routes @@ cors
+```
+
+This configuration:
+- Allows requests from any origin
+- Allows all HTTP methods
+- Allows all headers
+- Includes credentials
+- Exposes all response headers
+
+### Custom CORS Configuration
+
+Configure specific CORS policies:
+
+```scala
+import zio.http._
+import zio.http.Header._
+import zio.http.Middleware.{cors, CorsConfig}
+
+val config: CorsConfig = CorsConfig(
+  allowedOrigin = {
+    case origin if origin == Origin.parse("http://localhost:3000").toOption.get =>
+      Some(AccessControlAllowOrigin.Specific(origin))
+    case _ => None
+  },
+  allowedMethods = AccessControlAllowMethods(Method.GET, Method.POST, Method.PUT, Method.DELETE),
+  allowedHeaders = AccessControlAllowHeaders.All,
+  allowCredentials = AccessControlAllowCredentials.Allow,
+  exposedHeaders = AccessControlExposeHeaders.All,
+  maxAge = Some(AccessControlMaxAge(1.day)),
+)
+
+val routes: Routes[Any, Response] = Routes(
+  Method.GET / "api" / "users" ->
+    handler(Response.json("""[{"id":1,"name":"Alice"}]""")),
+) @@ cors(config)
+```
+
+## CORS Configuration Options
+
+### Allowed Origins
+
+Control which origins can access your API:
+
+```scala
+val config = CorsConfig(
+  allowedOrigin = {
+    // Allow specific origin
+    case origin if origin.host == "example.com" =>
+      Some(AccessControlAllowOrigin.Specific(origin))
+    
+    // Allow multiple specific origins
+    case origin if List("localhost", "example.com", "app.example.com")
+      .contains(origin.host) =>
+      Some(AccessControlAllowOrigin.Specific(origin))
+    
+    // Allow all origins (not recommended for production)
+    case origin =>
+      Some(AccessControlAllowOrigin.All)
+    
+    // Deny specific origins
+    case origin if origin.host == "blocked.com" =>
+      None
+    
+    // Default deny
+    case _ => None
+  },
+)
+```
+
+<Warning>
+Using `AccessControlAllowOrigin.All` (wildcard `*`) in production is not recommended as it allows any domain to access your API.
+</Warning>
+
+### Allowed Methods
+
+Specify which HTTP methods are permitted:
+
+```scala
+val config = CorsConfig(
+  allowedMethods = AccessControlAllowMethods(
+    Method.GET,
+    Method.POST,
+    Method.PUT,
+    Method.DELETE,
+    Method.PATCH
+  ),
+)
+```
+
+### Allowed Headers
+
+Control which request headers are allowed:
+
+```scala
+import zio.http.Header._
+
+// Allow all headers
+val allHeaders = CorsConfig(
+  allowedHeaders = AccessControlAllowHeaders.All,
+)
+
+// Allow specific headers
+val specificHeaders = CorsConfig(
+  allowedHeaders = AccessControlAllowHeaders.Some(
+    NonEmptyChunk(
+      "content-type",
+      "authorization",
+      "x-api-key",
+      "x-request-id"
+    )
+  ),
+)
+
+// Deny all custom headers
+val noHeaders = CorsConfig(
+  allowedHeaders = AccessControlAllowHeaders.None,
+)
+```
+
+### Exposed Headers
+
+Specify which response headers the browser can access:
+
+```scala
+val config = CorsConfig(
+  exposedHeaders = AccessControlExposeHeaders.Some(
+    NonEmptyChunk(
+      "x-total-count",
+      "x-page-number",
+      "x-rate-limit-remaining"
+    )
+  ),
+)
+```
+
+### Credentials
+
+Allow or deny credentials (cookies, authorization headers):
+
+```scala
+// Allow credentials
+val withCredentials = CorsConfig(
+  allowCredentials = AccessControlAllowCredentials.Allow,
+)
+
+// Deny credentials
+val withoutCredentials = CorsConfig(
+  allowCredentials = AccessControlAllowCredentials.Deny,
+)
+```
+
+<Note>
+When `allowCredentials` is `Allow`, you cannot use `AccessControlAllowOrigin.All`. You must specify exact origins.
+</Note>
+
+### Max Age
+
+Cache preflight responses to reduce OPTIONS requests:
+
+```scala
+val config = CorsConfig(
+  maxAge = Some(AccessControlMaxAge(1.day)), // Cache for 1 day
+)
+```
+
+## Complete CORS Example
+
+Here's a full example with frontend and backend:
+
+```scala
+import zio._
+import zio.http._
+import zio.http.Header.{AccessControlAllowOrigin, Origin}
+import zio.http.Middleware.{CorsConfig, cors}
+import zio.http.codec.PathCodec
+import zio.http.template._
+
+object CorsExample extends ZIOAppDefault {
+
+  // CORS configuration for backend API
+  val corsConfig: CorsConfig = CorsConfig(
+    allowedOrigin = {
+      case origin if origin == Origin.parse("http://localhost:3000").toOption.get =>
+        Some(AccessControlAllowOrigin.Specific(origin))
+      case _ => None
+    },
+    allowedMethods = AccessControlAllowMethods(Method.GET, Method.POST),
+    allowedHeaders = AccessControlAllowHeaders.All,
+    allowCredentials = AccessControlAllowCredentials.Allow,
+  )
+
+  // Backend API on port 8080
+  val backend: Routes[Any, Response] = Routes(
+    Method.GET / "json" -> 
+      handler(Response.json("""{
+        "message": "Hello from backend!",
+        "timestamp": """ + System.currentTimeMillis() + """
+      }""")),
+  ) @@ cors(corsConfig)
+
+  // Frontend on port 3000
+  val frontend: Routes[Any, Response] = Routes(
+    Method.GET / PathCodec.empty -> handler(
+      Response.html(
+        html(
+          head(
+            title("CORS Example"),
+          ),
+          body(
+            h1("CORS Example"),
+            p("Message from API: ", output(id := "message")),
+            script("""
+              // This runs on http://localhost:3000
+              fetch('http://localhost:8080/json', {
+                credentials: 'include'
+              })
+                .then(res => res.json())
+                .then(data => {
+                  document.querySelector('#message').textContent = data.message;
+                })
+                .catch(err => {
+                  document.querySelector('#message').textContent = 'Error: ' + err;
+                });
+            """),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  val frontendServer = Server.serve(frontend).provide(Server.defaultWithPort(3000))
+  val backendServer  = Server.serve(backend).provide(Server.defaultWithPort(8080))
+
+  val run = frontendServer.zipPar(backendServer)
+}
+```
+
+Run this example and open http://localhost:3000 in your browser to see CORS in action.
+
+## Environment-Specific CORS
+
+Configure CORS differently per environment:
+
+```scala
+import zio._
+import zio.http._
+
+object CorsConfig {
+  
+  def forEnvironment(env: String): Middleware.CorsConfig = env match {
+    case "production" => productionConfig
+    case "staging"    => stagingConfig
+    case _            => developmentConfig
+  }
+  
+  private val productionConfig = Middleware.CorsConfig(
+    allowedOrigin = {
+      case origin if origin.host == "api.example.com" =>
+        Some(Header.AccessControlAllowOrigin.Specific(origin))
+      case _ => None
+    },
+    allowedMethods = Header.AccessControlAllowMethods(
+      Method.GET, Method.POST, Method.PUT, Method.DELETE
+    ),
+    allowCredentials = Header.AccessControlAllowCredentials.Allow,
+    maxAge = Some(Header.AccessControlMaxAge(1.day)),
+  )
+  
+  private val stagingConfig = Middleware.CorsConfig(
+    allowedOrigin = {
+      case origin if origin.host.endsWith(".staging.example.com") =>
+        Some(Header.AccessControlAllowOrigin.Specific(origin))
+      case _ => None
+    },
+  )
+  
+  private val developmentConfig = Middleware.CorsConfig(
+    allowedOrigin = origin => Some(Header.AccessControlAllowOrigin.Specific(origin)),
+  )
+}
+
+// Usage
+val env = System.getenv("ENV")
+val routes = myRoutes @@ Middleware.cors(CorsConfig.forEnvironment(env))
+```
+
+## CORS with Authentication
+
+Combine CORS with authentication middleware:
+
+```scala
+import zio.http._
+import zio.http.Middleware._
+
+val corsConfig = CorsConfig(
+  allowedOrigin = {
+    case origin if origin.host == "app.example.com" =>
+      Some(Header.AccessControlAllowOrigin.Specific(origin))
+    case _ => None
+  },
+  allowCredentials = Header.AccessControlAllowCredentials.Allow,
+)
+
+val publicRoutes = Routes(
+  Method.POST / "login" -> loginHandler,
+  Method.POST / "register" -> registerHandler,
+)
+
+val protectedRoutes = Routes(
+  Method.GET / "profile" -> profileHandler,
+  Method.GET / "data" -> dataHandler,
+) @@ bearerAuth
+
+// Apply CORS to all routes
+val allRoutes = (publicRoutes ++ protectedRoutes) @@ cors(corsConfig)
+```
+
+<Info>
+Apply CORS middleware after authentication middleware to ensure OPTIONS preflight requests don't require authentication.
+</Info>
+
+## Debugging CORS Issues
+
+### Check Browser Console
+
+CORS errors appear in the browser's developer console:
+
+```
+Access to fetch at 'http://localhost:8080/api' from origin 'http://localhost:3000' 
+has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present.
+```
+
+### Verify Headers
+
+Check response headers in browser DevTools Network tab:
+
+- `Access-Control-Allow-Origin` - Should match request origin
+- `Access-Control-Allow-Methods` - Should include request method
+- `Access-Control-Allow-Headers` - Should include request headers
+- `Access-Control-Allow-Credentials` - Should be `true` if using credentials
+
+### Test with Middleware.debug
+
+Log all requests and responses:
+
+```scala
+val routes = myRoutes @@ cors(config) @@ Middleware.debug
+```
+
+### Common Issues
+
+<Accordion title="CORS error even with correct configuration">
+Make sure CORS middleware is applied to routes. Use `routes @@ cors(config)` syntax.
+</Accordion>
+
+<Accordion title="OPTIONS requests return 404">
+ZIO HTTP automatically handles OPTIONS requests when CORS middleware is applied.
+</Accordion>
+
+<Accordion title="Credentials not sent">
+Ensure frontend includes `credentials: 'include'` in fetch options and backend has `allowCredentials = Allow`.
+</Accordion>
+
+<Accordion title="Custom headers blocked">
+Add custom headers to `allowedHeaders` in CORS configuration.
+</Accordion>
+
+## Best Practices
+
+<Card title="Restrict Origins in Production" icon="lock">
+Never use wildcard (`*`) origins in production. Always specify exact allowed origins.
+</Card>
+
+<Card title="Use HTTPS" icon="shield">
+Always use HTTPS in production to prevent man-in-the-middle attacks.
+</Card>
+
+<Card title="Minimize Exposed Headers" icon="eye-slash">
+Only expose headers that frontend actually needs to access.
+</Card>
+
+<Card title="Set Appropriate Max Age" icon="clock">
+Cache preflight responses (1 hour to 1 day) to reduce OPTIONS requests.
+</Card>
+
+<Card title="Test with Real Browsers" icon="browser">
+CORS is browser-enforced. Test with actual browsers, not curl or Postman.
+</Card>
+
+## Security Considerations
+
+### Avoid Wildcard Origins with Credentials
+
+```scala
+// ❌ BAD: Security vulnerability
+val badConfig = CorsConfig(
+  allowedOrigin = _ => Some(AccessControlAllowOrigin.All),
+  allowCredentials = AccessControlAllowCredentials.Allow,
+)
+
+// ✅ GOOD: Specific origins
+val goodConfig = CorsConfig(
+  allowedOrigin = {
+    case origin if trustedOrigins.contains(origin.host) =>
+      Some(AccessControlAllowOrigin.Specific(origin))
+    case _ => None
+  },
+  allowCredentials = AccessControlAllowCredentials.Allow,
+)
+```
+
+### Validate Origins Strictly
+
+```scala
+val trustedOrigins = Set(
+  "example.com",
+  "app.example.com",
+  "api.example.com"
+)
+
+val config = CorsConfig(
+  allowedOrigin = { origin =>
+    // Exact match only - prevent subdomain attacks
+    if (trustedOrigins.contains(origin.host))
+      Some(AccessControlAllowOrigin.Specific(origin))
+    else
+      None
+  },
+)
+```
+
+## Next Steps
+
+- Learn about [Authentication](/guides/authentication) to secure your API
+- Explore [Middleware](/concepts/middleware) for other cross-cutting concerns
+- Read about [Error Handling](/guides/error-handling) for proper error responses

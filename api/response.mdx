@@ -1,0 +1,606 @@
+---
+title: Response
+description: API reference for zio.http.Response
+---
+
+`Response` represents an HTTP response with status code, headers, and body.
+
+## Type Signature
+
+```scala
+final case class Response(
+  status: Status = Status.Ok,
+  headers: Headers = Headers.empty,
+  body: Body = Body.empty,
+)
+```
+
+<ParamField path="status" type="Status" default="Status.Ok">
+  The HTTP status code
+</ParamField>
+
+<ParamField path="headers" type="Headers" default="Headers.empty">
+  HTTP response headers
+</ParamField>
+
+<ParamField path="body" type="Body" default="Body.empty">
+  The response body
+</ParamField>
+
+## Creating Responses
+
+### Response.ok
+
+```scala
+val ok: Response
+```
+
+Creates an empty response with 200 OK status.
+
+### Response.status
+
+```scala
+def status(status: Status): Response
+```
+
+Creates an empty response with the specified status.
+
+<ParamField path="status" type="Status">
+  The HTTP status code
+</ParamField>
+
+**Example:**
+
+```scala
+Response.status(Status.Created)
+```
+
+### Response.text
+
+```scala
+def text(text: CharSequence): Response
+```
+
+Creates a response with plain text content.
+
+<ParamField path="text" type="CharSequence">
+  The text content
+</ParamField>
+
+**Example:**
+
+```scala
+Response.text("Hello, World!")
+```
+
+### Response.html
+
+```scala
+def html(data: Html, status: Status = Status.Ok): Response
+```
+
+Creates a response with HTML content.
+
+<ParamField path="data" type="Html">
+  The HTML template
+</ParamField>
+
+<ParamField path="status" type="Status" default="Status.Ok">
+  The HTTP status
+</ParamField>
+
+**Example:**
+
+```scala
+Response.html(html(
+  body(
+    h1("Welcome"),
+    p("Hello, World!")
+  )
+))
+```
+
+### Response.json
+
+```scala
+def json(data: CharSequence): Response
+```
+
+Creates a response with JSON content (sets Content-Type to application/json).
+
+<ParamField path="data" type="CharSequence">
+  The JSON string
+</ParamField>
+
+**Example:**
+
+```scala
+Response.json("""{ "message": "success" }""")
+```
+
+## Error Responses
+
+### Response.error
+
+```scala
+def error(status: Status.Error): Response
+def error(status: Status.Error, message: String): Response
+def error(status: Status.Error, body: Body): Response
+```
+
+Creates an error response.
+
+<ParamField path="status" type="Status.Error">
+  Error status code (4xx or 5xx)
+</ParamField>
+
+<ParamField path="message" type="String">
+  Error message
+</ParamField>
+
+### Response.badRequest
+
+```scala
+def badRequest: Response
+def badRequest(message: String): Response
+```
+
+Creates a 400 Bad Request response.
+
+### Response.unauthorized
+
+```scala
+def unauthorized: Response
+def unauthorized(message: String): Response
+```
+
+Creates a 401 Unauthorized response.
+
+### Response.forbidden
+
+```scala
+def forbidden: Response
+def forbidden(message: String): Response
+```
+
+Creates a 403 Forbidden response.
+
+### Response.notFound
+
+```scala
+def notFound: Response
+def notFound(message: String): Response
+```
+
+Creates a 404 Not Found response.
+
+### Response.internalServerError
+
+```scala
+def internalServerError: Response
+def internalServerError(message: String): Response
+```
+
+Creates a 500 Internal Server Error response.
+
+### Response.serviceUnavailable
+
+```scala
+def serviceUnavailable: Response
+def serviceUnavailable(message: String): Response
+```
+
+Creates a 503 Service Unavailable response.
+
+### Response.badGateway
+
+```scala
+def badGateway: Response
+def badGateway(message: String): Response
+```
+
+Creates a 502 Bad Gateway response.
+
+### Response.gatewayTimeout
+
+```scala
+def gatewayTimeout: Response
+def gatewayTimeout(message: String): Response
+```
+
+Creates a 504 Gateway Timeout response.
+
+### Response.notImplemented
+
+```scala
+def notImplemented: Response
+def notImplemented(message: String): Response
+```
+
+Creates a 501 Not Implemented response.
+
+## Redirects
+
+### Response.redirect
+
+```scala
+def redirect(location: URL, isPermanent: Boolean = false): Response
+```
+
+Creates a redirect response (307 or 308).
+
+<ParamField path="location" type="URL">
+  The redirect target URL
+</ParamField>
+
+<ParamField path="isPermanent" type="Boolean" default="false">
+  If true, uses 308 Permanent Redirect; otherwise 307 Temporary Redirect
+</ParamField>
+
+**Example:**
+
+```scala
+Response.redirect(URL.root / "login")
+```
+
+### Response.seeOther
+
+```scala
+def seeOther(location: URL): Response
+```
+
+Creates a 303 See Other redirect (always uses GET for redirect).
+
+<ParamField path="location" type="URL">
+  The redirect target
+</ParamField>
+
+## Creating from Effects
+
+### Response.fromCause
+
+```scala
+def fromCause(cause: Cause[Any]): Response
+def fromCause(cause: Cause[Any], config: ErrorResponseConfig): Response
+```
+
+Creates a response from a ZIO Cause, automatically determining the status code.
+
+<ParamField path="cause" type="Cause[Any]">
+  The error cause
+</ParamField>
+
+<ParamField path="config" type="ErrorResponseConfig">
+  Configuration for error responses
+</ParamField>
+
+**Example:**
+
+```scala
+Response.fromCause(Cause.fail(new Exception("Database error")))
+// Returns 500 Internal Server Error
+```
+
+### Response.fromCauseWith
+
+```scala
+def fromCauseWith[E](cause: Cause[E], config: ErrorResponseConfig)(f: E => Response): Response
+```
+
+Creates a response from a Cause, using a function to handle typed errors.
+
+<ParamField path="f" type="E => Response">
+  Function to convert typed errors to responses
+</ParamField>
+
+### Response.fromThrowable
+
+```scala
+def fromThrowable(throwable: Throwable): Response
+def fromThrowable(throwable: Throwable, config: ErrorResponseConfig): Response
+```
+
+Creates a response from a Throwable with appropriate status code.
+
+<ParamField path="throwable" type="Throwable">
+  The exception
+</ParamField>
+
+Status code mapping:
+- `FileNotFoundException` → 404 Not Found
+- `AccessDeniedException` → 403 Forbidden
+- `IllegalArgumentException` → 400 Bad Request
+- `ConnectException` → 503 Service Unavailable
+- `SocketTimeoutException` → 504 Gateway Timeout
+- Other → 500 Internal Server Error
+
+## WebSocket and Streaming
+
+### Response.fromSocketApp
+
+```scala
+def fromSocketApp[R](app: WebSocketApp[R])(implicit trace: Trace): ZIO[R, Nothing, Response]
+```
+
+Creates a response that upgrades the connection to WebSocket.
+
+<ParamField path="app" type="WebSocketApp[R]">
+  The WebSocket application
+</ParamField>
+
+<ResponseField name="return" type="ZIO[R, Nothing, Response]">
+  Effect producing the upgrade response
+</ResponseField>
+
+### Response.fromServerSentEvents
+
+```scala
+def fromServerSentEvents[T: Schema](data: ZStream[Any, Nothing, ServerSentEvent[T]])(implicit trace: Trace): Response
+def fromServerSentEvents[T: Schema](data: Iterable[ServerSentEvent[T]])(implicit trace: Trace): Response
+def fromServerSentEvent[T: Schema](data: ServerSentEvent[T])(implicit trace: Trace): Response
+```
+
+Creates Server-Sent Events responses.
+
+<ParamField path="data" type="ZStream[Any, Nothing, ServerSentEvent[T]]">
+  Stream of server-sent events
+</ParamField>
+
+**Example:**
+
+```scala
+val events = ZStream.fromIterable(List(
+  ServerSentEvent("update", data = "Event 1"),
+  ServerSentEvent("update", data = "Event 2"),
+))
+
+Response.fromServerSentEvents(events)
+```
+
+## Modifying Responses
+
+### status
+
+```scala
+def status(status: Status): Response
+```
+
+Sets the response status.
+
+<ParamField path="status" type="Status">
+  The new status code
+</ParamField>
+
+### contentType
+
+```scala
+def contentType(mediaType: MediaType): Response
+```
+
+Sets the Content-Type header.
+
+<ParamField path="mediaType" type="MediaType">
+  The media type
+</ParamField>
+
+**Example:**
+
+```scala
+response.contentType(MediaType.application.json)
+```
+
+### updateHeaders
+
+```scala
+def updateHeaders(update: Headers => Headers)(implicit trace: Trace): Response
+```
+
+Transforms the headers using a function.
+
+<ParamField path="update" type="Headers => Headers">
+  Function to transform headers
+</ParamField>
+
+### patch
+
+```scala
+def patch(p: Response.Patch)(implicit trace: Trace): Response
+```
+
+Applies a patch to the response.
+
+<ParamField path="p" type="Response.Patch">
+  The patch to apply
+</ParamField>
+
+## Cookies
+
+### addCookie
+
+```scala
+def addCookie(cookie: Cookie.Response): Response
+```
+
+Adds a Set-Cookie header.
+
+<ParamField path="cookie" type="Cookie.Response">
+  The cookie to set
+</ParamField>
+
+**Example:**
+
+```scala
+val cookie = Cookie.Response("session", "abc123", maxAge = Some(3600.seconds))
+response.addCookie(cookie)
+```
+
+### addCookies
+
+```scala
+def addCookies(cookie: Cookie.Response, cookies: Cookie.Response*): Response
+```
+
+Adds multiple cookies.
+
+### addFlash
+
+```scala
+def addFlash[A](setter: Flash.Setter[A]): Response
+```
+
+Adds values to cookie-based flash scope.
+
+<ParamField path="setter" type="Flash.Setter[A]">
+  The flash scope setter
+</ParamField>
+
+## Body Operations
+
+### bodyAs
+
+```scala
+def bodyAs[A](implicit codec: BinaryCodec[A], trace: Trace): Task[A]
+```
+
+Decodes the response body using a zio-schema codec.
+
+<ParamField path="codec" type="BinaryCodec[A]">
+  The codec for decoding (implicit)
+</ParamField>
+
+<ResponseField name="return" type="Task[A]">
+  Effect producing the decoded value
+</ResponseField>
+
+**Example:**
+
+```scala
+import zio.schema.codec.JsonCodec._
+
+case class User(id: Int, name: String)
+implicit val schema: Schema[User] = DeriveSchema.gen[User]
+
+response.bodyAs[User]
+```
+
+### collect
+
+```scala
+def collect(implicit trace: Trace): ZIO[Any, Nothing, Response]
+```
+
+Collects the potentially streaming body into a single chunk.
+
+<ResponseField name="return" type="ZIO[Any, Nothing, Response]">
+  Effect producing response with materialized body
+</ResponseField>
+
+### ignoreBody
+
+```scala
+def ignoreBody(implicit trace: Trace): ZIO[Any, Nothing, Response]
+```
+
+Consumes and discards the streaming body.
+
+<ResponseField name="return" type="ZIO[Any, Nothing, Response]">
+  Effect producing response with empty body
+</ResponseField>
+
+## Conversion
+
+### toHandler
+
+```scala
+def toHandler(implicit trace: Trace): Handler[Any, Nothing, Any, Response]
+```
+
+Converts the response into a handler that always returns this response.
+
+<ResponseField name="return" type="Handler[Any, Nothing, Any, Response]">
+  Handler returning this response
+</ResponseField>
+
+## Response.Patch
+
+```scala
+sealed trait Patch
+```
+
+Represents modifications to apply to a response.
+
+### Creating Patches
+
+#### Patch.empty
+
+```scala
+val empty: Patch
+```
+
+#### Patch.addHeader
+
+```scala
+def addHeader(name: CharSequence, value: CharSequence): Patch
+def addHeader(header: Header): Patch
+def addHeaders(headers: Headers): Patch
+```
+
+Creates a patch that adds headers.
+
+#### Patch.removeHeaders
+
+```scala
+def removeHeaders(headerTypes: Set[HeaderType]): Patch
+```
+
+Creates a patch that removes headers.
+
+#### Patch.status
+
+```scala
+def status(status: Status): Patch
+```
+
+Creates a patch that sets the status.
+
+#### Patch.updateHeaders
+
+```scala
+def updateHeaders(f: Headers => Headers): Patch
+```
+
+Creates a patch that transforms headers.
+
+### Combining Patches
+
+```scala
+def ++(that: Patch): Patch
+```
+
+Combines two patches.
+
+**Example:**
+
+```scala
+val patch = 
+  Response.Patch.status(Status.Created) ++
+  Response.Patch.addHeader("X-Request-ID", "123")
+  
+response.patch(patch)
+```
+
+### Applying Patches
+
+```scala
+def apply(res: Response)(implicit trace: Trace): Response
+```
+
+Applies the patch to a response.
+
+<ParamField path="res" type="Response">
+  The response to modify
+</ParamField>
+
+<ResponseField name="return" type="Response">
+  The modified response
+</ResponseField>

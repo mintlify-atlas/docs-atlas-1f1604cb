@@ -1,0 +1,524 @@
+---
+title: WebSocket Client
+description: Connect to WebSocket servers using ZIO HTTP client
+---
+
+ZIO HTTP provides a powerful WebSocket client that allows you to establish WebSocket connections, send and receive messages, and handle connection lifecycle events.
+
+## Basic WebSocket Connection
+
+### Using WebSocketApp
+
+The core of WebSocket client functionality is `WebSocketApp`:
+
+```scala
+import zio._
+import zio.http._
+import zio.http.ChannelEvent._
+
+val socketApp: WebSocketApp[Any] = 
+  Handler.webSocket { channel =>
+    channel.receiveAll {
+      // Handle connection established
+      case UserEventTriggered(UserEvent.HandshakeComplete) =>
+        channel.send(Read(WebSocketFrame.text("Hello, Server!")))
+      
+      // Handle incoming text messages
+      case Read(WebSocketFrame.Text(text)) =>
+        Console.printLine(s"Received: $text").ignore
+      
+      // Handle connection close
+      case Read(WebSocketFrame.Close(status, reason)) =>
+        Console.printLine(s"Connection closed: $status - $reason").ignore
+      
+      case _ =>
+        ZIO.unit
+    }
+  }
+```
+
+Reference: [WebSocketApp.scala:5](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:5)
+
+### Connecting to a WebSocket Server
+
+```scala
+import zio._
+import zio.http._
+
+val url = "ws://ws.vi-server.org/mirror"
+
+val app: ZIO[Client, Throwable, Response] =
+  ZIO.scoped(socketApp.connect(url) *> ZIO.never)
+
+val run: ZIO[Any, Throwable, Any] =
+  app.provide(Client.default)
+```
+
+Reference: [WebSocketApp.scala:14](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:14)
+
+<Note>
+**Important**: WebSocket connections require a `Scope` to manage the connection lifecycle. Use `ZIO.scoped` to ensure proper resource cleanup.
+</Note>
+
+## WebSocket Connection Methods
+
+### Connect with URL String
+
+```scala
+val connection: ZIO[Client & Scope, Throwable, Response] =
+  socketApp.connect(
+    url = "wss://echo.websocket.org",
+    headers = Headers(Header.Authorization.Bearer("token"))
+  )
+```
+
+Reference: [WebSocketApp.scala:14](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:14)
+
+### Connect with URL Object
+
+```scala
+val wsUrl = URL.decode("wss://echo.websocket.org").toOption.get
+
+val connection: ZIO[Client & Scope, Throwable, Response] =
+  socketApp.connect(wsUrl, Headers.empty)
+```
+
+Reference: [WebSocketApp.scala:22](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:22)
+
+### Using Client Service
+
+```scala
+val connection = for {
+  client <- ZIO.service[Client]
+  wsUrl <- ZIO.fromEither(URL.decode("wss://echo.websocket.org"))
+  response <- client.url(wsUrl).socket(socketApp)
+} yield response
+
+val run = ZIO.scoped(connection).provide(Client.default)
+```
+
+Reference: [ZClient.scala:213](zio-http/shared/src/main/scala/zio/http/ZClient.scala:213)
+
+### Using ZClient.socket
+
+```scala
+import zio._
+import zio.http._
+
+val connection: ZIO[Client & Scope, Throwable, Response] =
+  ZClient.socket(socketApp)
+
+val run = connection.provide(Client.default)
+```
+
+Reference: [ZClient.scala:345](zio-http/shared/src/main/scala/zio/http/ZClient.scala:345)
+
+## Handling WebSocket Events
+
+### Channel Events
+
+WebSocket channels emit various events:
+
+```scala
+import zio.http.ChannelEvent._
+
+val socketApp = Handler.webSocket { channel =>
+  channel.receiveAll {
+    // Connection established
+    case UserEventTriggered(UserEvent.HandshakeComplete) =>
+      Console.printLine("WebSocket connected!") *>
+      channel.send(Read(WebSocketFrame.text("Hello")))
+    
+    // Received text frame
+    case Read(WebSocketFrame.Text(text)) =>
+      Console.printLine(s"Text: $text")
+    
+    // Received binary frame
+    case Read(WebSocketFrame.Binary(data)) =>
+      Console.printLine(s"Binary: ${data.size} bytes")
+    
+    // Received ping
+    case Read(WebSocketFrame.Ping) =>
+      channel.send(Read(WebSocketFrame.Pong))
+    
+    // Received pong
+    case Read(WebSocketFrame.Pong) =>
+      Console.printLine("Pong received")
+    
+    // Connection closing
+    case Read(WebSocketFrame.Close(status, reason)) =>
+      Console.printLine(s"Close: $status - $reason")
+    
+    // Catch all
+    case _ =>
+      ZIO.unit
+  }
+}
+```
+
+## Sending WebSocket Messages
+
+### Text Messages
+
+```scala
+// Send text message
+channel.send(Read(WebSocketFrame.text("Hello, Server!")))
+```
+
+### Binary Messages
+
+```scala
+import zio.Chunk
+
+val binaryData = Chunk.fromArray(Array[Byte](1, 2, 3, 4, 5))
+channel.send(Read(WebSocketFrame.binary(binaryData)))
+```
+
+### Ping/Pong
+
+```scala
+// Send ping
+channel.send(Read(WebSocketFrame.Ping))
+
+// Send pong
+channel.send(Read(WebSocketFrame.Pong))
+```
+
+### Close Connection
+
+```scala
+// Close with status code
+channel.send(Read(WebSocketFrame.close(1000)))
+
+// Close with status code and reason
+channel.send(Read(WebSocketFrame.close(1000, "Normal closure")))
+```
+
+## Complete WebSocket Example
+
+```scala
+import zio._
+import zio.http._
+import zio.http.ChannelEvent.{Read, UserEvent, UserEventTriggered}
+
+object WebSocketSimpleClient extends ZIOAppDefault {
+
+  val url = "ws://ws.vi-server.org/mirror"
+
+  val socketApp: WebSocketApp[Any] =
+    Handler.webSocket { channel =>
+      channel.receiveAll {
+        // Send a "foo" message to the server once the connection is established
+        case UserEventTriggered(UserEvent.HandshakeComplete) =>
+          channel.send(Read(WebSocketFrame.text("foo")))
+
+        // Send a "bar" if the server sends a "foo"
+        case Read(WebSocketFrame.Text("foo")) =>
+          channel.send(Read(WebSocketFrame.text("bar")))
+
+        // Close the connection if the server sends a "bar"
+        case Read(WebSocketFrame.Text("bar")) =>
+          ZIO.succeed(println("Goodbye!")) *> 
+          channel.send(Read(WebSocketFrame.close(1000)))
+
+        case _ =>
+          ZIO.unit
+      }
+    }
+
+  val app: ZIO[Client, Throwable, Response] =
+    ZIO.scoped(socketApp.connect(url) *> ZIO.never)
+
+  val run: ZIO[Any, Throwable, Any] =
+    app.provide(Client.default)
+}
+```
+
+Reference: [WebSocketSimpleClient.scala](zio-http-example/src/main/scala/example/websocket/WebSocketSimpleClient.scala)
+
+## URL Scheme Handling
+
+ZIO HTTP automatically handles WebSocket URL schemes:
+
+```scala
+// These are equivalent for WebSocket connections:
+"ws://example.com"   // -> ws://example.com
+"http://example.com" // -> ws://example.com
+
+"wss://example.com"  // -> wss://example.com
+"https://example.com" // -> wss://example.com
+```
+
+Reference: [ZClient.scala:637](zio-http/shared/src/main/scala/zio/http/ZClient.scala:637)
+
+<Note>
+HTTP URLs are automatically converted to WebSocket URLs: `http://` becomes `ws://` and `https://` becomes `wss://`.
+</Note>
+
+## WebSocket with Authentication
+
+```scala
+val token = "your-auth-token"
+
+val headers = Headers(
+  Header.Authorization.Bearer(token),
+  Header.Custom("X-Client-ID", "client-123")
+)
+
+val authenticatedConnection = socketApp.connect(
+  url = "wss://secure.example.com/ws",
+  headers = headers
+)
+```
+
+## Custom WebSocket Configuration
+
+```scala
+import zio.http._
+
+val customWsConfig = WebSocketConfig.default
+  // Configure WebSocket-specific settings
+
+val socketAppWithConfig = socketApp.withConfig(customWsConfig)
+```
+
+Reference: [WebSocketApp.scala:78](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:78)
+
+## Environment and Dependencies
+
+### Providing Environment
+
+```scala
+// WebSocketApp with dependencies
+val socketAppWithEnv: WebSocketApp[MyService] = 
+  Handler.webSocket { channel =>
+    channel.receiveAll {
+      case Read(WebSocketFrame.Text(text)) =>
+        for {
+          service <- ZIO.service[MyService]
+          result <- service.processMessage(text)
+          _ <- channel.send(Read(WebSocketFrame.text(result)))
+        } yield ()
+      
+      case _ => ZIO.unit
+    }
+  }
+
+// Provide environment
+val providedApp: WebSocketApp[Any] = 
+  socketAppWithEnv.provideEnvironment(
+    ZEnvironment(myServiceImpl)
+  )
+
+// Or use layers
+val layeredApp: WebSocketApp[Any] =
+  socketAppWithEnv.provideLayer(MyService.live)
+```
+
+References: [WebSocketApp.scala:34](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:34), [WebSocketApp.scala:36](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:36)
+
+### Providing Some Environment
+
+```scala
+val partiallyProvided: WebSocketApp[Remaining] =
+  socketApp.provideSomeLayer(partialLayer)
+```
+
+Reference: [WebSocketApp.scala:47](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:47)
+
+## Error Handling
+
+### Tap Error
+
+```scala
+val errorHandlingApp = socketApp.tapErrorZIO { error =>
+  Console.printLine(s"WebSocket error: ${error.getMessage}")
+}
+```
+
+Reference: [WebSocketApp.scala:60](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:60)
+
+### Tap Error Cause
+
+```scala
+val causeHandlingApp = socketApp.tapErrorCauseZIO { cause =>
+  Console.printLine(s"WebSocket failure cause: $cause")
+}
+```
+
+Reference: [WebSocketApp.scala:52](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:52)
+
+## Converting to Routes
+
+```scala
+// Convert WebSocketApp to Routes for server integration
+val routes: Routes[Any, Response] = socketApp.toRoutes
+```
+
+Reference: [WebSocketApp.scala:75](zio-http/shared/src/main/scala/zio/http/WebSocketApp.scala:75)
+
+## Advanced Example: Message Echo with State
+
+```scala
+import zio._
+import zio.http._
+import zio.http.ChannelEvent._
+
+object StatefulWebSocketClient extends ZIOAppDefault {
+  
+  val socketApp = Handler.webSocket { channel =>
+    for {
+      // Create message counter
+      counter <- Ref.make(0)
+      
+      // Handle messages
+      _ <- channel.receiveAll {
+        case UserEventTriggered(UserEvent.HandshakeComplete) =>
+          Console.printLine("Connected to WebSocket server") *>
+          channel.send(Read(WebSocketFrame.text("Hello")))
+        
+        case Read(WebSocketFrame.Text(text)) =>
+          for {
+            count <- counter.updateAndGet(_ + 1)
+            _ <- Console.printLine(s"Message #$count: $text")
+            response = s"Echo #$count: $text"
+            _ <- channel.send(Read(WebSocketFrame.text(response)))
+            // Close after 5 messages
+            _ <- channel.send(Read(WebSocketFrame.close(1000))).when(count >= 5)
+          } yield ()
+        
+        case Read(WebSocketFrame.Close(status, reason)) =>
+          Console.printLine(s"Connection closed: $status - $reason")
+        
+        case _ => ZIO.unit
+      }
+    } yield ()
+  }
+  
+  val app = ZIO.scoped {
+    socketApp.connect("wss://echo.websocket.org") *> ZIO.never
+  }
+  
+  override val run = app.provide(Client.default)
+}
+```
+
+## WebSocket Client with SSL
+
+```scala
+import zio._
+import zio.http._
+import zio.http.netty.NettyConfig
+
+object SecureWebSocketClient extends ZIOAppDefault {
+  
+  val sslConfig = ClientSSLConfig.FromTrustStoreResource(
+    trustStorePath = "truststore.jks",
+    trustStorePassword = "changeit"
+  )
+  
+  val clientConfig = ZClient.Config.default.ssl(sslConfig)
+  
+  val socketApp: WebSocketApp[Any] = 
+    Handler.webSocket { channel =>
+      channel.receiveAll {
+        case UserEventTriggered(UserEvent.HandshakeComplete) =>
+          channel.send(Read(WebSocketFrame.text("Secure hello")))
+        
+        case Read(WebSocketFrame.Text(text)) =>
+          Console.printLine(s"Secure message: $text")
+        
+        case _ => ZIO.unit
+      }
+    }
+  
+  val app = ZIO.scoped {
+    socketApp.connect("wss://secure.example.com/ws") *> ZIO.never
+  }
+  
+  override val run = app.provide(
+    ZLayer.succeed(clientConfig),
+    Client.live,
+    ZLayer.succeed(NettyConfig.default),
+    DnsResolver.default,
+  )
+}
+```
+
+## Best Practices
+
+### Resource Management
+
+Always use `ZIO.scoped` to ensure WebSocket connections are properly closed:
+
+```scala
+// Good: Properly scoped
+val app = ZIO.scoped {
+  socketApp.connect(url) *> longRunningLogic
+}
+
+// Bad: Missing scope - connection may leak
+val app = socketApp.connect(url) // Compile error - missing Scope
+```
+
+### Error Handling
+
+Handle connection errors gracefully:
+
+```scala
+val resilientApp = socketApp
+  .tapErrorZIO { error =>
+    Console.printLine(s"Connection error: ${error.getMessage}") *>
+    // Log or report error
+    ZIO.unit
+  }
+```
+
+### Graceful Shutdown
+
+Close connections with proper status codes:
+
+```scala
+// Normal closure
+channel.send(Read(WebSocketFrame.close(1000, "Normal closure")))
+
+// Going away
+channel.send(Read(WebSocketFrame.close(1001, "Client going away")))
+
+// Protocol error
+channel.send(Read(WebSocketFrame.close(1002, "Protocol error")))
+```
+
+### Keep-Alive
+
+Implement ping/pong for connection health:
+
+```scala
+val keepAliveApp = Handler.webSocket { channel =>
+  for {
+    // Send ping every 30 seconds
+    _ <- (channel.send(Read(WebSocketFrame.Ping)) *> 
+          ZIO.sleep(30.seconds)).forever.fork
+    
+    // Handle messages
+    _ <- channel.receiveAll {
+      case Read(WebSocketFrame.Pong) =>
+        // Connection is alive
+        ZIO.unit
+      
+      case other => handleMessage(other)
+    }
+  } yield ()
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Client Overview" icon="book" href="/client/overview">
+    Learn about HTTP client features
+  </Card>
+  <Card title="Configuration" icon="gear" href="/client/configuration">
+    Configure SSL, timeouts, and connection pooling
+  </Card>
+</CardGroup>

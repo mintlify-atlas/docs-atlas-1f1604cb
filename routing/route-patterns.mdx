@@ -1,0 +1,244 @@
+---
+title: Route Patterns
+description: Learn how to define route patterns with HTTP methods and path segments in ZIO HTTP
+---
+
+Route patterns in ZIO HTTP combine HTTP methods with path patterns to match incoming requests. They provide a type-safe, composable way to define routes using the `/` operator.
+
+## Basic Route Patterns
+
+A route pattern consists of an HTTP method combined with path segments:
+
+```scala
+import zio.http._
+
+// Simple GET route
+val getUsersRoute = Method.GET / "users"
+
+// POST route with nested path
+val createPostRoute = Method.POST / "api" / "v1" / "posts"
+
+// Route with multiple segments
+val resourceRoute = Method.DELETE / "resources" / "items"
+```
+
+## Using RoutePattern Constructors
+
+ZIO HTTP provides convenient constructors in the `RoutePattern` companion object:
+
+```scala
+import zio.http._
+
+val getPattern = RoutePattern.GET / "users"
+val postPattern = RoutePattern.POST / "api" / "posts"
+val putPattern = RoutePattern.PUT / "settings"
+val deletePattern = RoutePattern.DELETE / "items"
+val patchPattern = RoutePattern.PATCH / "profile"
+```
+
+Available method patterns:
+- `RoutePattern.GET`
+- `RoutePattern.POST`
+- `RoutePattern.PUT`
+- `RoutePattern.DELETE`
+- `RoutePattern.PATCH`
+- `RoutePattern.HEAD`
+- `RoutePattern.OPTIONS`
+- `RoutePattern.CONNECT`
+- `RoutePattern.TRACE`
+
+## Composing Route Patterns
+
+Route patterns are highly composable using the `/` operator:
+
+```scala
+import zio.http._
+import zio.http.codec.PathCodec
+
+// Build routes incrementally
+val apiBase = Method.GET / "api" / "v1"
+val usersRoute = apiBase / "users"
+val postsRoute = apiBase / "posts"
+
+// Combine with path parameters
+val userDetailRoute = apiBase / "users" / int("userId")
+```
+
+## Creating Routes from Patterns
+
+Use the `->` operator to attach a handler to a route pattern:
+
+```scala
+import zio.http._
+
+// Simple route with handler
+val route = Method.GET / "hello" -> handler {
+  Response.text("Hello, World!")
+}
+
+// Route with path parameters
+val userRoute = Method.GET / "users" / int("id") -> handler { (id: Int, req: Request) =>
+  Response.text(s"User ID: $id")
+}
+
+// Ignoring parameters
+val staticRoute = Method.GET / "about" -> Handler.fromResponse(
+  Response.text("About page")
+)
+```
+
+## Route Pattern Matching
+
+Route patterns can match and decode incoming requests:
+
+```scala
+import zio.http._
+
+val pattern = Method.GET / "users" / int("id")
+
+// Decode a method and path
+val result = pattern.decode(Method.GET, Path("/users/123"))
+// result: Right(123)
+
+// Check if pattern matches
+val matches = pattern.matches(Method.GET, Path("/users/456"))
+// matches: true
+```
+
+## Encoding Route Patterns
+
+You can encode values back into paths:
+
+```scala
+import zio.http._
+
+val pattern = Method.GET / "users" / int("id") / "profile"
+
+// Format a value into a path
+val path = pattern.format(42)
+// path: Right(Path("/users/42/profile"))
+
+// Encode method and path together
+val encoded = pattern.encode(42)
+// encoded: Right((Method.GET, Path("/users/42/profile")))
+```
+
+## Pattern Alternatives
+
+Route patterns can have alternatives for different HTTP methods:
+
+```scala
+import zio.http._
+
+val pattern = Method.ANY / "resource" / string("id")
+
+// Get all alternative patterns
+val alternatives = pattern.alternatives
+// Returns patterns for GET, POST, PUT, DELETE, etc.
+```
+
+## Adding Documentation
+
+Document your route patterns using the `??` operator:
+
+```scala
+import zio.http._
+import zio.http.codec.Doc
+
+val pattern = Method.GET / "users" / int("id") ??
+  Doc.p("Retrieves a user by their unique identifier")
+```
+
+## Rendering Route Patterns
+
+Route patterns can be rendered as strings for debugging or documentation:
+
+```scala
+import zio.http._
+
+val pattern = Method.GET / "users" / int("id") / "posts"
+
+val rendered = pattern.render
+// rendered: "GET /users/{id}/posts"
+
+println(pattern.toString)
+// Output: GET /users/{id}/posts
+```
+
+## Advanced Pattern Matching
+
+Use pattern matching with route patterns using the `unapply` method:
+
+```scala
+import zio.http._
+
+val pattern = Method.GET / "users" / int("userId")
+
+val tuple = (Method.GET, Path("/users/123"))
+
+pattern.unapply(tuple) match {
+  case Some(userId) => println(s"User ID: $userId")
+  case None => println("Pattern did not match")
+}
+```
+
+## Method.ANY Pattern
+
+The `Method.ANY` pattern matches any HTTP method:
+
+```scala
+import zio.http._
+
+// Matches all methods
+val anyMethodRoute = Method.ANY / "webhook" -> handler { (req: Request) =>
+  Response.text(s"Received ${req.method} request")
+}
+
+// The universal pattern (use with caution)
+val catchAll = RoutePattern.any
+// Matches any method and any path
+```
+
+<Warning>
+Use `RoutePattern.any` carefully as it matches everything and should typically be placed last in your route collection.
+</Warning>
+
+## Nesting Route Patterns
+
+Nest route patterns under a common prefix:
+
+```scala
+import zio.http._
+import zio.http.codec.PathCodec
+
+val pattern = Method.GET / "users" / int("id")
+val nestedPattern = pattern.nest(PathCodec.literal("api") / "v1")
+
+// nestedPattern renders as: GET /api/v1/users/{id}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Type-Safe Parameters">
+    Prefer typed path parameters (`int("id")`, `uuid("uuid")`) over string parameters for better compile-time safety.
+  </Accordion>
+
+  <Accordion title="Specific Before General">
+    Order routes from most specific to most general. More specific patterns should be defined before catch-all patterns.
+  </Accordion>
+
+  <Accordion title="Consistent Naming">
+    Use consistent parameter names across your API (e.g., always use `"id"` for identifiers, not mixing `"id"`, `"userId"`, etc.).
+  </Accordion>
+
+  <Accordion title="Document Complex Patterns">
+    Add documentation to complex route patterns using the `??` operator to improve API discoverability.
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [Path Parameters](/routing/path-parameters) - Extract typed values from URL paths
+- [Query Parameters](/routing/query-parameters) - Work with URL query strings
+- [Routes](/core-concepts/routes) - Combine patterns with handlers

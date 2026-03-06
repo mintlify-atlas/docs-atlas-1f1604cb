@@ -1,0 +1,410 @@
+---
+title: Request
+description: Work with HTTP requests in ZIO HTTP
+---
+
+The `Request` type represents an HTTP request with all its components including method, URL, headers, and body.
+
+## Overview
+
+```scala
+final case class Request(
+  version: Version = Version.Default,
+  method: Method = Method.ANY,
+  url: URL = URL.empty,
+  headers: Headers = Headers.empty,
+  body: Body = Body.empty,
+  remoteAddress: Option[InetAddress] = None,
+  remoteCertificate: Option[Certificate] = None,
+)
+```
+
+## Creating Requests
+
+### HTTP Methods
+
+Use convenient constructors for common HTTP methods:
+
+```scala
+import zio.http._
+
+// GET request
+val getRequest = Request.get("/api/users")
+val getWithUrl = Request.get(URL.root / "api" / "users")
+
+// POST request with body
+val postRequest = Request.post(
+  "/api/users",
+  Body.fromString("""{
+    "name": "Alice",
+    "email": "alice@example.com"
+  }""")
+)
+
+// PUT request
+val putRequest = Request.put("/api/users/123", Body.fromString("..."))
+
+// PATCH request
+val patchRequest = Request.patch("/api/users/123", Body.fromString("..."))
+
+// DELETE request
+val deleteRequest = Request.delete("/api/users/123")
+
+// HEAD request
+val headRequest = Request.head("/api/users")
+
+// OPTIONS request
+val optionsRequest = Request.options("/api/users")
+```
+
+### Manual Construction
+
+Build requests with all components:
+
+```scala
+val request = Request(
+  method = Method.POST,
+  url = URL.root / "api" / "users",
+  headers = Headers(
+    Header.ContentType(MediaType.application.json),
+    Header.Authorization.Bearer("token")
+  ),
+  body = Body.fromString("""{ "name": "Bob" }""")
+)
+```
+
+## Accessing Components
+
+### URL and Path
+
+```scala
+val request: Request = ???
+
+// Get the path
+val path: Path = request.path
+val pathString: String = request.path.encode
+
+// Get full URL
+val url: URL = request.url
+
+// Check method
+if (request.method == Method.GET) {
+  // Handle GET request
+}
+```
+
+### Headers
+
+Access request headers:
+
+```scala
+import zio.http._
+
+val request: Request = ???
+
+// Get specific header
+val contentType: Option[Header.ContentType] = 
+  request.header(Header.ContentType)
+
+// Get authorization
+val auth: Option[Header.Authorization] = 
+  request.header(Header.Authorization)
+
+// Get raw header by name
+val customHeader: Option[String] = 
+  request.rawHeader("X-Custom-Header")
+
+// Check if header exists
+if (request.headers.contains(Header.Accept.name)) {
+  // Header present
+}
+```
+
+### Query Parameters
+
+Work with query parameters:
+
+```scala
+val request: Request = ???
+
+// Get query parameters
+val params: QueryParams = request.queryParameters
+
+// Get specific parameter
+val userId: Option[String] = params.get("userId")
+
+// Get all values for a parameter
+val tags: Chunk[String] = params.getAll("tag")
+
+// Check if parameter exists
+if (params.contains("filter")) {
+  // Parameter present
+}
+```
+
+### Cookies
+
+Access request cookies:
+
+```scala
+val request: Request = ???
+
+// Get all cookies
+val cookies: Chunk[Cookie] = request.cookies
+
+// Get specific cookie
+val sessionCookie: Option[Cookie] = 
+  request.cookie("session_id")
+
+// Work with cookie effectfully
+val result: ZIO[Any, Throwable, String] = 
+  request.cookieWithZIO("session_id") { cookie =>
+    ZIO.succeed(cookie.value)
+  }
+
+// With custom error
+val result2: ZIO[Any, String, String] = 
+  request.cookieWithOrFail("session_id")("Session not found") { cookie =>
+    ZIO.succeed(cookie.value)
+  }
+```
+
+## Modifying Requests
+
+### Updating the URL
+
+```scala
+val request: Request = ???
+
+// Update URL
+val updated = request.updateURL { url =>
+  url.addQueryParam("page", "1")
+}
+
+// Update path
+val withNewPath = request.updatePath { path =>
+  path / "v2"
+}
+
+// Set path directly
+val withPath = request.path(Path.root / "api" / "users")
+
+// Add/remove slashes
+val withLeading = request.addLeadingSlash
+val withTrailing = request.addTrailingSlash
+val withoutTrailing = request.dropTrailingSlash
+```
+
+### Updating Headers
+
+```scala
+val request: Request = ???
+
+// Add headers
+val withHeader = request.addHeader(
+  Header.ContentType(MediaType.application.json)
+)
+
+// Update headers with function
+val updated = request.updateHeaders { headers =>
+  headers.addHeader(Header.Accept(MediaType.application.json))
+}
+
+// Remove headers
+val withoutAuth = request.removeHeader(Header.Authorization.name)
+```
+
+### Updating Query Parameters
+
+```scala
+val request: Request = ???
+
+// Update query params
+val withParams = request.updateQueryParams { params =>
+  params.add("limit", "10").add("offset", "0")
+}
+```
+
+### Adding Cookies
+
+```scala
+val request: Request = ???
+
+val sessionCookie = Cookie.Request(
+  name = "session_id",
+  content = "abc123"
+)
+
+val withCookie = request.addCookie(sessionCookie)
+
+// Add multiple cookies
+val withCookies = request.addCookies(
+  sessionCookie,
+  Cookie.Request("theme", "dark")
+)
+```
+
+### Updating the Body
+
+```scala
+val request: Request = ???
+
+// Replace body
+val withBody = request.withBody(Body.fromString("new content"))
+
+// Transform body
+val transformed = request.updateBody { body =>
+  Body.fromString("prefix: " + body.asString)
+}
+
+// Transform body effectfully
+val transformedZIO: ZIO[Any, Throwable, Request] = 
+  request.updateBodyZIO { body =>
+    body.asString.map { text =>
+      Body.fromString(text.toUpperCase)
+    }
+  }
+```
+
+## Working with the Body
+
+### Collecting the Body
+
+Materialize a streaming body:
+
+```scala
+val request: Request = ???
+
+// Collect body into single chunk
+val collected: ZIO[Any, Nothing, Request] = 
+  request.collect
+```
+
+### Ignoring the Body
+
+Discard the body:
+
+```scala
+val request: Request = ???
+
+// Consume and discard body
+val ignored: ZIO[Any, Nothing, Request] = 
+  request.ignoreBody
+```
+
+### Accessing Body Content
+
+```scala
+import zio.schema.codec._
+
+val request: Request = ???
+
+// As string
+val text: Task[String] = request.body.asString
+
+// As bytes
+val bytes: Task[Chunk[Byte]] = request.body.asChunk
+
+// Decode with schema
+case class User(name: String, email: String)
+implicit val schema: Schema[User] = DeriveSchema.gen[User]
+
+val user: Task[User] = request.body.to[User]
+
+// As stream
+val stream: ZStream[Any, Throwable, Byte] = request.body.asStream
+```
+
+## Path Manipulation
+
+### Unnesting Paths
+
+Remove a path prefix:
+
+```scala
+val request = Request.get("/api/v1/users/123")
+
+val unnested = request.unnest(Path.root / "api" / "v1")
+// Path is now /users/123
+```
+
+## Combining Requests
+
+Merge two requests with right-biased semantics:
+
+```scala
+val baseRequest = Request.get("/api/users")
+  .addHeader(Header.Accept(MediaType.application.json))
+
+val extendedRequest = Request(
+  method = Method.POST,
+  headers = Headers(Header.ContentType(MediaType.application.json))
+)
+
+val combined = baseRequest ++ extendedRequest
+// method: POST (from right)
+// headers: Accept + ContentType (merged)
+```
+
+## Applying Patches
+
+Apply incremental modifications:
+
+```scala
+val request: Request = ???
+
+val patch = Request.Patch(
+  addHeaders = Headers(Header.Custom("X-Request-ID", "123")),
+  addQueryParams = QueryParams("version" -> "2")
+)
+
+val patched = request.patch(patch)
+```
+
+## Flash Scope
+
+Access flash-scoped data:
+
+```scala
+import zio.http.Flash
+
+val request: Request = ???
+
+val flashMessage: Option[String] = 
+  request.flash(Flash.get[String]("message"))
+```
+
+## Remote Information
+
+```scala
+val request: Request = ???
+
+// Get remote address
+val remoteAddr: Option[InetAddress] = request.remoteAddress
+
+// Get client certificate (for mTLS)
+val cert: Option[Certificate] = request.remoteCertificate
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Constructors" icon="wrench">
+    Prefer method-specific constructors like `Request.get()` for clarity.
+  </Card>
+  <Card title="Immutable Updates" icon="lock">
+    All request modifications return new instances.
+  </Card>
+  <Card title="Handle Streaming Bodies" icon="water">
+    Use `collect` or `asStream` depending on size and memory constraints.
+  </Card>
+  <Card title="Type-Safe Headers" icon="shield-check">
+    Use typed header accessors like `Header.ContentType` when possible.
+  </Card>
+</CardGroup>
+
+## Related
+
+- [Response](/concepts/response) - HTTP response structure
+- [Handler](/concepts/handlers) - Processing requests
+- [Body](https://zio.dev/zio-http/reference/body) - Working with request and response bodies

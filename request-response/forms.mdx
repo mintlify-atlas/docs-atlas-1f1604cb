@@ -1,0 +1,594 @@
+---
+title: Forms
+description: Handling form data and multipart uploads in ZIO HTTP
+---
+
+ZIO HTTP provides comprehensive support for HTML forms, including URL-encoded forms and multipart form data for file uploads.
+
+## Form Types
+
+ZIO HTTP supports two form encoding types:
+
+- **URL-encoded** - `application/x-www-form-urlencoded`
+- **Multipart** - `multipart/form-data`
+
+## Creating Forms
+
+### Simple Form
+
+```scala
+import zio.http._
+
+val form = Form(
+  FormField.Simple("username", "john_doe"),
+  FormField.Simple("email", "john@example.com")
+)
+
+// Or using helper
+val form2 = Form.fromStrings(
+  "username" -> "john_doe",
+  "email" -> "john@example.com"
+)
+```
+
+### Empty Form
+
+```scala
+val emptyForm = Form.empty
+```
+
+## Form Fields
+
+### Simple Field
+
+Text fields for basic key-value data:
+
+```scala
+import zio.http._
+
+val usernameField = FormField.Simple(
+  name = "username",
+  value = "john_doe"
+)
+
+val simpleField = FormField.simpleField("key", "value")
+```
+
+### Text Field
+
+Text fields with content type and optional filename:
+
+```scala
+val textField = FormField.Text(
+  name = "description",
+  value = "Product description here",
+  contentType = MediaType.text.plain,
+  filename = Some("description.txt")
+)
+
+val textFieldHelper = FormField.textField(
+  name = "notes",
+  value = "Some notes",
+  mediaType = MediaType.text.plain
+)
+```
+
+### Binary Field
+
+For binary data like images or files:
+
+```scala
+import zio._
+
+val imageData: Chunk[Byte] = ??? // Your image bytes
+
+val binaryField = FormField.Binary(
+  name = "avatar",
+  data = imageData,
+  contentType = MediaType.image.png,
+  filename = Some("avatar.png")
+)
+
+val binaryFieldHelper = FormField.binaryField(
+  name = "file",
+  data = fileBytes,
+  mediaType = MediaType.application.pdf,
+  filename = Some("document.pdf")
+)
+```
+
+### Streaming Binary Field
+
+For large files that should be streamed:
+
+```scala
+import zio.stream._
+import zio._
+
+val fileStream: ZStream[Any, Nothing, Byte] = 
+  ZStream.fromFile(java.nio.file.Paths.get("/path/to/file"))
+
+val streamingField = FormField.StreamingBinary(
+  name = "upload",
+  contentType = MediaType.video.mp4,
+  filename = Some("video.mp4"),
+  data = fileStream
+)
+
+val streamingFieldHelper = FormField.streamingBinaryField(
+  name = "large_file",
+  data = fileStream,
+  mediaType = MediaType.application.`octet-stream`,
+  filename = Some("archive.zip")
+)
+```
+
+## Reading Form Data
+
+### URL-Encoded Forms
+
+```scala
+import zio.http._
+
+val app = Routes(
+  Method.POST / "submit" -> handler { (req: Request) =>
+    for {
+      form <- req.body.asURLEncodedForm
+      name = form.get("username").flatMap(_.stringValue)
+      email = form.get("email").flatMap(_.stringValue)
+    } yield Response.text(
+      s"Received: $name, $email"
+    )
+  }
+).toHttpApp
+```
+
+### Multipart Forms
+
+```scala
+import zio.http._
+
+val app = Routes(
+  Method.POST / "upload" -> handler { (req: Request) =>
+    for {
+      form <- req.body.asMultipartForm
+      file <- ZIO.fromOption(form.get("file"))
+        .orElseFail(new Exception("File not found"))
+      bytes <- file.asChunk
+      _     <- saveFile(bytes) // Your save logic
+    } yield Response.text(s"Uploaded ${bytes.length} bytes")
+  }
+).toHttpApp
+```
+
+### Streaming Multipart Forms
+
+For handling large file uploads without loading everything into memory:
+
+```scala
+import zio.http._
+import zio.stream._
+
+val app = Routes(
+  Method.POST / "upload-large" -> handler { (req: Request) =>
+    for {
+      streamingForm <- req.body.asMultipartFormStream
+      result        <- streamingForm.fields.runFoldWhile(0L)(_ < 1000000L) {
+        case (size, field) =>
+          field match {
+            case FormField.StreamingBinary(name, _, _, _, stream) =>
+              // Process stream without loading all into memory
+              stream.runFold(size)(_ + _.length.toLong)
+            case _ => 
+              ZIO.succeed(size)
+          }
+      }.flatten
+    } yield Response.text(s"Processed $result bytes")
+  }
+).toHttpApp
+```
+
+## Getting Form Field Values
+
+### Access by Name
+
+```scala
+import zio.http._
+
+val form = Form.fromStrings(
+  "name" -> "John",
+  "age" -> "30"
+)
+
+// Get field
+val nameField: Option[FormField] = form.get("name")
+
+// Get string value
+val name: Option[String] = form.get("name").flatMap(_.stringValue)
+
+// As map
+val formMap: Map[String, FormField] = form.map
+```
+
+### Extract Text Values
+
+```scala
+import zio._
+
+// From text or simple field
+val textValue: ZIO[Any, CharacterCodingException, String] = 
+  field.asText
+
+// Get string value (only for text/simple fields)
+val stringValue: Option[String] = field.stringValue
+```
+
+### Extract Binary Values
+
+```scala
+import zio._
+import zio.stream._
+
+// As chunk of bytes
+val bytes: ZIO[Any, Nothing, Chunk[Byte]] = field.asChunk
+
+// As stream
+val stream: ZStream[Any, Nothing, Byte] = field.asStream
+```
+
+## Sending Forms
+
+### URL-Encoded Form
+
+```scala
+import zio.http._
+import zio.http.netty.NettyClient
+
+val form = Form.fromStrings(
+  "username" -> "john_doe",
+  "password" -> "secret123"
+)
+
+val program = for {
+  client <- ZIO.service[Client]
+  body   = Body.fromURLEncodedForm(form)
+  request = Request
+    .post("/login", body)
+    .url(URL.decode("https://api.example.com/login").toOption.get)
+  response <- client.request(request)
+} yield response
+```
+
+### Multipart Form
+
+```scala
+import zio.http._
+import zio._
+
+val imageBytes: Chunk[Byte] = ??? // Your image data
+
+val form = Form(
+  FormField.simpleField("title", "My Photo"),
+  FormField.simpleField("description", "A beautiful sunset"),
+  FormField.binaryField(
+    name = "photo",
+    data = imageBytes,
+    mediaType = MediaType.image.jpeg,
+    filename = Some("sunset.jpg")
+  )
+)
+
+val program = for {
+  client <- ZIO.service[Client]
+  body   <- Body.fromMultipartFormUUID(form)
+  request = Request
+    .post("/upload", body)
+    .url(URL.decode("https://api.example.com/upload").toOption.get)
+  response <- client.request(request)
+} yield response
+```
+
+### With Custom Boundary
+
+```scala
+import zio.http._
+
+val boundary = Boundary("----WebKitFormBoundary7MA4YWxkTrZu0gW")
+
+val body = Body.fromMultipartForm(form, boundary)
+
+val request = Request.post("/upload", body)
+```
+
+## Form Operations
+
+### Adding Fields
+
+```scala
+import zio.http._
+
+val form = Form.fromStrings(
+  "username" -> "john"
+)
+
+// Add a field
+val updatedForm = form + FormField.Simple("email", "john@example.com")
+
+// Or using append
+val form2 = form.append(FormField.Simple("age", "30"))
+```
+
+### Collecting Streaming Form
+
+Convert all streaming fields to in-memory fields:
+
+```scala
+import zio._
+
+val collected: ZIO[Any, Throwable, Form] = form.collectAll
+```
+
+### Converting to Query Params
+
+```scala
+val form = Form.fromStrings(
+  "search" -> "query",
+  "page" -> "1"
+)
+
+val queryParams: QueryParams = form.toQueryParams
+```
+
+### URL Encoding
+
+```scala
+// Default charset (UTF-8)
+val encoded: String = form.urlEncoded
+
+// Custom charset
+import java.nio.charset.StandardCharsets
+val encodedCustom: String = form.urlEncoded(StandardCharsets.ISO_8859_1)
+```
+
+## Multipart Encoding
+
+### Encode to Bytes
+
+```scala
+import zio._
+import zio.stream._
+
+val boundary = Boundary("----Boundary")
+
+// Get byte stream
+val byteStream: ZStream[Any, Nothing, Byte] = 
+  form.multipartBytes(boundary)
+
+// With random UUID boundary
+val withUUID: UIO[(Boundary, ZStream[Any, Nothing, Byte])] = 
+  form.multipartBytesUUID
+```
+
+## File Upload Example
+
+### Complete Upload Handler
+
+```scala
+import zio.http._
+import zio._
+import java.nio.file.{Files, Paths, StandardOpenOption}
+
+val uploadRoute = Routes(
+  Method.POST / "upload" -> handler { (req: Request) =>
+    for {
+      form     <- req.body.asMultipartForm
+      fileField <- ZIO.fromOption(form.get("file"))
+        .orElseFail(Response.badRequest("File field missing"))
+      filename <- ZIO.fromOption(fileField.filename)
+        .orElseFail(Response.badRequest("Filename missing"))
+      bytes    <- fileField.asChunk
+      path     = Paths.get(s"uploads/$filename")
+      _        <- ZIO.attemptBlocking {
+        Files.write(path, bytes.toArray, StandardOpenOption.CREATE)
+      }.orElseFail(Response.internalServerError("Failed to save file"))
+    } yield Response.text(s"Uploaded $filename (${bytes.length} bytes)")
+  }
+).toHttpApp
+```
+
+### Streaming Upload Handler
+
+```scala
+import zio.http._
+import zio.stream._
+import java.nio.file.{Paths, StandardOpenOption}
+
+val streamingUploadRoute = Routes(
+  Method.POST / "upload-stream" -> handler { (req: Request) =>
+    for {
+      streamingForm <- req.body.asMultipartFormStream
+      result        <- streamingForm.fields.runFoldWhile(Response.ok)(_ => true) {
+        case (_, FormField.StreamingBinary(name, contentType, _, filename, stream)) =>
+          filename match {
+            case Some(fname) =>
+              val path = Paths.get(s"uploads/$fname")
+              stream
+                .run(ZSink.fromFile(path, StandardOpenOption.CREATE))
+                .as(Response.text(s"Uploaded $fname"))
+                .catchAll(e => 
+                  ZIO.succeed(Response.internalServerError(e.getMessage))
+                )
+            case None =>
+              ZIO.succeed(Response.badRequest("Filename required"))
+          }
+        case (acc, _) => 
+          ZIO.succeed(acc)
+      }.flatten
+    } yield result
+  }
+).toHttpApp
+```
+
+## Decoding Multipart Data
+
+### From Bytes
+
+```scala
+import zio._
+import zio.http._
+
+val bytes: Chunk[Byte] = ??? // Multipart encoded data
+val boundary = Boundary("----Boundary")
+
+val decoded: ZIO[Any, Throwable, Form] = 
+  Form.fromMultipartBytes(
+    bytes,
+    boundary = Some(boundary)
+  )
+```
+
+### From Query Params
+
+```scala
+import zio.http._
+
+val queryParams = QueryParams(
+  "name" -> Chunk("John"),
+  "age" -> Chunk("30")
+)
+
+val form: Form = Form.fromQueryParams(queryParams)
+```
+
+### From URL Encoded String
+
+```scala
+import java.nio.charset.StandardCharsets
+
+val urlEncoded = "username=john&email=john%40example.com"
+
+val form: Either[FormDecodingError, Form] = 
+  Form.fromURLEncoded(urlEncoded, StandardCharsets.UTF_8)
+```
+
+## Common Patterns
+
+### Form Validation
+
+```scala
+import zio.http._
+import zio._
+
+case class UserForm(username: String, email: String, age: Int)
+
+def validateForm(form: Form): Either[String, UserForm] = {
+  for {
+    username <- form.get("username")
+      .flatMap(_.stringValue)
+      .toRight("Username is required")
+    email    <- form.get("email")
+      .flatMap(_.stringValue)
+      .toRight("Email is required")
+    ageStr   <- form.get("age")
+      .flatMap(_.stringValue)
+      .toRight("Age is required")
+    age      <- ageStr.toIntOption
+      .toRight("Age must be a number")
+  } yield UserForm(username, email, age)
+}
+
+val app = Routes(
+  Method.POST / "register" -> handler { (req: Request) =>
+    for {
+      form   <- req.body.asURLEncodedForm
+      result <- ZIO.fromEither(validateForm(form))
+        .mapError(err => Response.badRequest(err))
+      // Process valid form...
+    } yield Response.ok
+  }
+).toHttpApp
+```
+
+### Multiple File Upload
+
+```scala
+import zio.http._
+import zio._
+
+val multiFileUpload = Routes(
+  Method.POST / "upload-multiple" -> handler { (req: Request) =>
+    for {
+      form  <- req.body.asMultipartForm
+      files = form.formData.collect {
+        case f @ FormField.Binary(_, _, _, _, Some(name)) => (name, f)
+      }
+      results <- ZIO.foreach(files) { case (name, field) =>
+        field.asChunk.map(bytes => (name, bytes.length))
+      }
+    } yield Response.text(
+      results.map { case (name, size) => s"$name: $size bytes" }.mkString("\n")
+    )
+  }
+).toHttpApp
+```
+
+### Form with File and Metadata
+
+```scala
+import zio.http._
+import zio._
+
+case class FileUpload(
+  title: String,
+  description: String,
+  file: Chunk[Byte],
+  filename: String
+)
+
+def parseUploadForm(form: Form): ZIO[Any, Response, FileUpload] = {
+  for {
+    title <- ZIO.fromOption(form.get("title").flatMap(_.stringValue))
+      .orElseFail(Response.badRequest("Title required"))
+    desc  <- ZIO.fromOption(form.get("description").flatMap(_.stringValue))
+      .orElseFail(Response.badRequest("Description required"))
+    fileField <- ZIO.fromOption(form.get("file"))
+      .orElseFail(Response.badRequest("File required"))
+    filename  <- ZIO.fromOption(fileField.filename)
+      .orElseFail(Response.badRequest("Filename required"))
+    bytes     <- fileField.asChunk
+  } yield FileUpload(title, desc, bytes, filename)
+}
+```
+
+## Best Practices
+
+<Tip>
+  Use streaming fields for large file uploads to avoid loading everything into memory.
+</Tip>
+
+<Warning>
+  Always validate and sanitize filenames from user uploads to prevent directory traversal attacks.
+</Warning>
+
+<Tip>
+  Set appropriate size limits for form data to prevent abuse and resource exhaustion.
+</Tip>
+
+### Security Considerations
+
+1. **Validate file types** - Check MIME types and file extensions
+2. **Limit file sizes** - Set maximum upload sizes
+3. **Sanitize filenames** - Remove path separators and dangerous characters
+4. **Scan for malware** - Integrate virus scanning for user uploads
+5. **Use streaming** - For large files to prevent memory exhaustion
+
+### Pattern: Safe Filename
+
+```scala
+import java.nio.file.Paths
+
+def sanitizeFilename(filename: String): String = {
+  Paths.get(filename).getFileName.toString
+    .replaceAll("[^a-zA-Z0-9.-]", "_")
+}
+```

@@ -1,0 +1,443 @@
+---
+title: Making Requests
+description: Learn how to construct and send HTTP requests with ZIO HTTP client
+---
+
+The ZIO HTTP client provides multiple ways to construct and execute HTTP requests, from simple one-liners to complex request building with custom headers, query parameters, and bodies.
+
+## Basic Request Methods
+
+### Using Client Service Methods
+
+The most convenient way to make requests is using the client's HTTP verb methods:
+
+```scala
+import zio._
+import zio.http._
+
+val program = for {
+  client <- ZIO.service[Client]
+  
+  // GET request
+  getResponse <- client.url(baseUrl).get("/users")
+  
+  // POST request with body
+  postResponse <- client.url(baseUrl).post("/users")(userBody)
+  
+  // PUT request
+  putResponse <- client.url(baseUrl).put("/users/1")(updatedUser)
+  
+  // DELETE request
+  deleteResponse <- client.url(baseUrl).delete("/users/1")
+  
+  // PATCH request
+  patchResponse <- client.url(baseUrl).patch("/users/1")
+  
+  // HEAD request
+  headResponse <- client.url(baseUrl).head("/users")
+} yield ()
+```
+
+References: [ZClient.scala:128](zio-http/shared/src/main/scala/zio/http/ZClient.scala:128), [ZClient.scala:167](zio-http/shared/src/main/scala/zio/http/ZClient.scala:167), [ZClient.scala:170](zio-http/shared/src/main/scala/zio/http/ZClient.scala:170), [ZClient.scala:116](zio-http/shared/src/main/scala/zio/http/ZClient.scala:116)
+
+### Using Request Objects
+
+For more control, construct `Request` objects directly:
+
+```scala
+// GET request
+val getRequest = Request.get("/users")
+
+// POST request with body
+val postRequest = Request.post("/users", Body.fromString(jsonBody))
+
+// PUT request
+val putRequest = Request.put("/users/1", Body.fromString(jsonBody))
+
+// DELETE request
+val deleteRequest = Request.delete("/users/1")
+
+// Execute the request
+val response: ZIO[Client, Throwable, Response] = 
+  ZClient.batched(getRequest)
+```
+
+References: [Request.scala:225](zio-http/shared/src/main/scala/zio/http/Request.scala:225), [Request.scala:241](zio-http/shared/src/main/scala/zio/http/Request.scala:241), [Request.scala:245](zio-http/shared/src/main/scala/zio/http/Request.scala:245), [Request.scala:221](zio-http/shared/src/main/scala/zio/http/Request.scala:221)
+
+## Building URLs
+
+### Decoding from String
+
+```scala
+// Decode from string
+val url: Either[MalformedURLException, URL] = 
+  URL.decode("https://api.example.com/users?page=1")
+
+// Use with ZIO
+val program = for {
+  url <- ZIO.fromEither(URL.decode("https://api.example.com"))
+  response <- ZClient.batched(Request.get(url))
+} yield response
+```
+
+Reference: [URL.scala:296](zio-http/shared/src/main/scala/zio/http/URL.scala:296)
+
+### Building URLs Programmatically
+
+```scala
+val url = URL.empty
+  .scheme(Scheme.HTTPS)
+  .host("api.example.com")
+  .port(443)
+  .addPath("/users")
+  .addQueryParam("page", "1")
+  .addQueryParam("limit", "10")
+```
+
+References: [URL.scala:265](zio-http/shared/src/main/scala/zio/http/URL.scala:265), [URL.scala:106](zio-http/shared/src/main/scala/zio/http/URL.scala:106), [URL.scala:150](zio-http/shared/src/main/scala/zio/http/URL.scala:150)
+
+### Combining URLs
+
+```scala
+// Right-biased combination
+val baseUrl = URL.decode("https://api.example.com").toOption.get
+val pathUrl = URL(Path("/users"))
+val fullUrl = baseUrl ++ pathUrl
+
+// Using client builder
+val client = ZIO.serviceWith[Client] { client =>
+  client
+    .url(baseUrl)
+    .addPath("/users")
+    .addQueryParam("status", "active")
+}
+```
+
+References: [URL.scala:42](zio-http/shared/src/main/scala/zio/http/URL.scala:42), [ZClient.scala:66](zio-http/shared/src/main/scala/zio/http/ZClient.scala:66), [ZClient.scala:75](zio-http/shared/src/main/scala/zio/http/ZClient.scala:75)
+
+## Working with Headers
+
+### Adding Headers to Client
+
+```scala
+val client = ZIO.serviceWith[Client] { client =>
+  client
+    .url(baseUrl)
+    .addHeader(Header.Authorization.Bearer("your-token"))
+    .addHeader(Header.Accept(MediaType.application.json))
+    .addHeader(Header.Custom("X-API-Key", "key123"))
+}
+```
+
+### Adding Headers to Requests
+
+```scala
+// Using Request builder
+val request = Request.get(url)
+  .addHeader(Header.Authorization.Bearer("token"))
+  .addHeader(Header.ContentType(MediaType.application.json))
+
+// Execute with custom headers
+val response = for {
+  client <- ZIO.service[Client]
+  res <- client.url(baseUrl).addHeaders(customHeaders).get("/users")
+} yield res
+```
+
+Reference: [Request.scala:133](zio-http/shared/src/main/scala/zio/http/Request.scala:133)
+
+### Header Operations
+
+The client and request both implement `HeaderOps` for convenient header manipulation:
+
+```scala
+// Update headers functionally
+val updatedClient = client.updateHeaders { headers =>
+  headers
+    .addHeader(Header.UserAgent("MyApp/1.0"))
+    .removeHeader(Header.Accept)
+}
+```
+
+Reference: [ZClient.scala:45](zio-http/shared/src/main/scala/zio/http/ZClient.scala:45)
+
+## Working with Query Parameters
+
+### Adding Query Parameters
+
+```scala
+// Using client builder
+val client = ZIO.serviceWith[Client] { client =>
+  client
+    .url(baseUrl)
+    .addQueryParam("page", "1")
+    .addQueryParam("limit", "10")
+    .addQueryParam("sort", "name")
+}
+
+// Adding multiple parameters at once
+val params = QueryParams(
+  "page" -> "1",
+  "limit" -> "10",
+  "filter" -> "active"
+)
+
+val clientWithParams = ZIO.serviceWith[Client] { client =>
+  client.url(baseUrl).addQueryParams(params)
+}
+```
+
+References: [ZClient.scala:75](zio-http/shared/src/main/scala/zio/http/ZClient.scala:75), [ZClient.scala:78](zio-http/shared/src/main/scala/zio/http/ZClient.scala:78)
+
+### Updating Query Parameters
+
+```scala
+// Update parameters functionally
+val request = Request.get(url).updateQueryParams { params =>
+  params.addQueryParam("timestamp", System.currentTimeMillis().toString)
+}
+```
+
+Reference: [Request.scala:136](zio-http/shared/src/main/scala/zio/http/Request.scala:136)
+
+## Working with Request Bodies
+
+### String Body
+
+```scala
+val jsonBody = Body.fromString("""{ "name": "John", "email": "john@example.com" }""")
+val request = Request.post("/users", jsonBody)
+```
+
+### Bytes Body
+
+```scala
+val bytesBody = Body.fromChunk(Chunk.fromArray(data))
+val request = Request.post("/upload", bytesBody)
+```
+
+### Form Data
+
+```scala
+val formBody = Body.fromURLEncodedForm(
+  Form(
+    FormField.simpleField("username", "john"),
+    FormField.simpleField("password", "secret")
+  )
+)
+val request = Request.post("/login", formBody)
+```
+
+### Updating Request Body
+
+```scala
+// Replace body
+val updatedRequest = request.withBody(newBody)
+
+// Transform body
+val transformedRequest = request.updateBody { body =>
+  // Modify body
+  body
+}
+
+// Transform body effectfully
+val effectfulUpdate = request.updateBodyZIO { body =>
+  // Perform effects
+  ZIO.succeed(transformedBody)
+}
+```
+
+References: [Request.scala:164](zio-http/shared/src/main/scala/zio/http/Request.scala:164), [Request.scala:153](zio-http/shared/src/main/scala/zio/http/Request.scala:153), [Request.scala:159](zio-http/shared/src/main/scala/zio/http/Request.scala:159)
+
+## Executing Requests
+
+### Batched Requests (Fully Materialized)
+
+```scala
+// Using ZClient.batched - materializes response in memory
+val response: ZIO[Client, Throwable, Response] = 
+  ZClient.batched(Request.get(url))
+
+// Using client instance
+val program = for {
+  client <- ZIO.service[Client]
+  response <- client.batched(Request.get(url))
+  body <- response.body.asString
+} yield body
+```
+
+Reference: [ZClient.scala:295](zio-http/shared/src/main/scala/zio/http/ZClient.scala:295)
+
+<Note>
+**Note**: Batched requests materialize the full response into memory before resuming. This is convenient but not suitable for large response bodies.
+</Note>
+
+### Streaming Requests
+
+```scala
+// Requires Scope for resource management
+val streamingProgram = ZIO.scoped {
+  for {
+    response <- ZClient.streaming(Request.get(url))
+    // Process streaming body
+    _ <- response.body.asStream.foreach { chunk =>
+      // Process chunk
+      ZIO.succeed(println(s"Received ${chunk.size} bytes"))
+    }
+  } yield ()
+}
+```
+
+Reference: [ZClient.scala:328](zio-http/shared/src/main/scala/zio/http/ZClient.scala:328)
+
+<Note>
+**Important**: When using streaming mode, you must close the Scope **after** the body has been fully consumed. The response body is only valid within the Scope.
+</Note>
+
+### Stream Transformation
+
+```scala
+// Transform response to stream
+val stream: ZStream[Client, Throwable, String] = 
+  ZClient.streamingWith(Request.get(url)) { response =>
+    response.body.asStream.via(ZPipeline.utf8Decode)
+  }
+
+// Using client instance
+val program = for {
+  client <- ZIO.service[Client]
+  stream = client.stream(Request.get(url)) { response =>
+    response.body.asStream.map(_.asString)
+  }
+  lines <- stream.runCollect
+} yield lines
+```
+
+References: [ZClient.scala:340](zio-http/shared/src/main/scala/zio/http/ZClient.scala:340), [ZClient.scala:228](zio-http/shared/src/main/scala/zio/http/ZClient.scala:228)
+
+## Path Manipulation
+
+### Adding and Updating Paths
+
+```scala
+val client = ZIO.serviceWith[Client] { client =>
+  client
+    .url(baseUrl)
+    .addPath("/api")
+    .addPath("/v1")
+    .addPath(Path("/users"))
+}
+
+// Update path functionally
+val updatedClient = client.updatePath(_.addLeadingSlash)
+
+// Replace entire path
+val replacedClient = client.path(Path("/new/path"))
+```
+
+References: [ZClient.scala:66](zio-http/shared/src/main/scala/zio/http/ZClient.scala:66), [ZClient.scala:158](zio-http/shared/src/main/scala/zio/http/ZClient.scala:158), [ZClient.scala:156](zio-http/shared/src/main/scala/zio/http/ZClient.scala:156)
+
+### Path Helpers
+
+```scala
+// Add leading/trailing slashes
+val client1 = client.addLeadingSlash
+val client2 = client.addTrailingSlash
+
+// Same for requests
+val request = Request.get("/users")
+  .addLeadingSlash
+  .addTrailingSlash
+```
+
+References: [ZClient.scala:72](zio-http/shared/src/main/scala/zio/http/ZClient.scala:72), [ZClient.scala:81](zio-http/shared/src/main/scala/zio/http/ZClient.scala:81), [Request.scala:62](zio-http/shared/src/main/scala/zio/http/Request.scala:62), [Request.scala:87](zio-http/shared/src/main/scala/zio/http/Request.scala:87)
+
+## Working with Cookies
+
+### Adding Cookies to Requests
+
+```scala
+val cookie = Cookie.Request("session", "abc123")
+
+val request = Request.get(url)
+  .addCookie(cookie)
+  .addCookies(
+    Cookie.Request("preference", "dark-mode"),
+    Cookie.Request("language", "en")
+  )
+```
+
+References: [Request.scala:64](zio-http/shared/src/main/scala/zio/http/Request.scala:64), [Request.scala:74](zio-http/shared/src/main/scala/zio/http/Request.scala:74)
+
+### Reading Cookies from Responses
+
+```scala
+val program = for {
+  response <- ZClient.batched(Request.get(url))
+  cookies = response.header(Header.SetCookie)
+  _ <- ZIO.foreach(cookies) { cookie =>
+    Console.printLine(s"Cookie: ${cookie}")
+  }
+} yield ()
+```
+
+## Collecting Response Bodies
+
+```scala
+// Fully collect a potentially streaming request body
+val collectedRequest: ZIO[Any, Nothing, Request] = 
+  request.collect
+
+// Ignore and discard body
+val ignoredRequest: ZIO[Any, Nothing, Request] = 
+  request.ignoreBody
+```
+
+References: [Request.scala:96](zio-http/shared/src/main/scala/zio/http/Request.scala:96), [Request.scala:113](zio-http/shared/src/main/scala/zio/http/Request.scala:113)
+
+## Complete Example
+
+```scala
+import zio._
+import zio.http._
+
+object CompleteExample extends ZIOAppDefault {
+  val program = for {
+    // Build URL
+    url <- ZIO.fromEither(
+      URL.decode("https://jsonplaceholder.typicode.com")
+    )
+    
+    // Get client
+    client <- ZIO.service[Client]
+    
+    // Configure client
+    configuredClient = client
+      .url(url)
+      .addPath("/posts")
+      .addQueryParam("userId", "1")
+      .addHeader(Header.Accept(MediaType.application.json))
+    
+    // Make batched request
+    response <- configuredClient.batched(Request.get("/"))
+    
+    // Process response
+    body <- response.body.asString
+    _ <- Console.printLine(s"Status: ${response.status}")
+    _ <- Console.printLine(s"Body: ${body}")
+  } yield ()
+  
+  override val run = program.provide(Client.default)
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/client/configuration">
+    Learn about SSL, connection pooling, and timeouts
+  </Card>
+  <Card title="WebSockets" icon="plug" href="/client/websockets">
+    Connect to WebSocket servers
+  </Card>
+</CardGroup>

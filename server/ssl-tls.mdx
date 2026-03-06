@@ -1,0 +1,464 @@
+---
+title: SSL/TLS Configuration
+description: Secure your ZIO HTTP server with HTTPS, certificates, and mutual TLS
+---
+
+ZIO HTTP provides comprehensive SSL/TLS support for securing HTTP servers. The `SSLConfig` API supports multiple certificate sources, mutual TLS (mTLS), and flexible protocol configuration.
+
+## Quick Start
+
+### Basic HTTPS Server
+
+Create an HTTPS server with a certificate and private key:
+
+```scala
+import zio._
+import zio.http._
+
+val sslConfig = SSLConfig.fromResource("server.crt", "server.key")
+
+val serverConfig = Server.Config.default
+  .port(8443)
+  .ssl(sslConfig)
+
+val app = Server.serve(routes).provide(
+  ZLayer.succeed(serverConfig) >>> Server.live
+)
+```
+
+### Self-Signed Certificate (Development)
+
+For testing, generate a self-signed certificate automatically:
+
+```scala
+val sslConfig = SSLConfig.generate
+
+val serverConfig = Server.Config.default
+  .port(8443)
+  .ssl(sslConfig)
+```
+
+<Warning>
+**Development only:** Self-signed certificates should never be used in production.
+</Warning>
+
+## Certificate Sources
+
+### From Files
+
+Load certificates from the filesystem:
+
+```scala
+val sslConfig = SSLConfig.fromFile(
+  certPath = "/etc/ssl/certs/server.crt",
+  keyPath = "/etc/ssl/private/server.key"
+)
+```
+
+With trust certificate collection:
+
+```scala
+val sslConfig = SSLConfig.fromFile(
+  behaviour = SSLConfig.HttpBehaviour.Redirect,
+  certPath = "/etc/ssl/certs/server.crt",
+  keyPath = "/etc/ssl/private/server.key",
+  trustCertCollectionPath = Some("/etc/ssl/certs/ca-bundle.crt")
+)
+```
+
+### From Resources
+
+Load certificates from classpath resources:
+
+```scala
+val sslConfig = SSLConfig.fromResource(
+  certPath = "certificates/server.crt",
+  keyPath = "certificates/server.key"
+)
+```
+
+With trust certificate:
+
+```scala
+val sslConfig = SSLConfig.fromResource(
+  behaviour = SSLConfig.HttpBehaviour.Redirect,
+  certPath = "server.crt",
+  keyPath = "server.key",
+  trustCertCollectionPath = Some("ca-bundle.crt")
+)
+```
+
+### From Java KeyStore (JKS)
+
+Load certificates from JKS keystores:
+
+```scala
+import zio.Config.Secret
+
+val sslConfig = SSLConfig.fromJavaxNetSslKeyStoreFile(
+  keyManagerFile = "/path/to/keystore.jks",
+  keyManagerPassword = Some(Secret("password123"))
+)
+```
+
+With custom keystore type:
+
+```scala
+val sslConfig = SSLConfig.fromJavaxNetSslKeyStoreFile(
+  keyManagerFile = "/path/to/keystore.jks",
+  keyManagerPassword = Some(Secret("password")),
+  keyManagerKeyStoreType = "PKCS12"
+)
+```
+
+From classpath resources:
+
+```scala
+val sslConfig = SSLConfig.fromJavaxNetSslKeyStoreResource(
+  keyManagerResource = "keystore.jks",
+  keyManagerPassword = Some(Secret("password"))
+)
+```
+
+### Builder Pattern for JKS
+
+Use the builder API for complex configurations:
+
+```scala
+import zio.http.SSLConfig.Data.FromJavaxNetSsl
+
+val jksData = FromJavaxNetSsl()
+  .keyManagerKeyStoreType("JKS")
+  .keyManagerFile("/path/to/keystore.jks")
+  .keyManagerPassword(Secret("password"))
+  .trustManagerKeyStore(
+    Data.TrustManagerKeyStore
+      .fromFile("/path/to/truststore.jks")
+      .trustManagerPassword(Secret("trustpass"))
+  )
+  .build()
+
+val sslConfig = SSLConfig.fromJavaxNetSsl(jksData)
+```
+
+## HTTP Behaviour
+
+Control how the server handles non-HTTPS requests:
+
+```scala
+import zio.http.SSLConfig.HttpBehaviour
+
+// Redirect HTTP to HTTPS (default)
+val redirect = SSLConfig.fromFile(
+  HttpBehaviour.Redirect,
+  "server.crt",
+  "server.key"
+)
+
+// Accept both HTTP and HTTPS
+val accept = SSLConfig.fromFile(
+  HttpBehaviour.Accept,
+  "server.crt",
+  "server.key"
+)
+
+// Fail/reject HTTP requests
+val fail = SSLConfig.fromFile(
+  HttpBehaviour.Fail,
+  "server.crt",
+  "server.key"
+)
+```
+
+**Behaviours:**
+- `Redirect` (default): HTTP requests receive 308 Permanent Redirect to HTTPS
+- `Accept`: Server accepts both HTTP and HTTPS connections
+- `Fail`: HTTP requests are rejected
+
+## Mutual TLS (mTLS)
+
+Require client certificates for authentication:
+
+```scala
+import zio.http.ClientAuth
+
+val sslConfig = SSLConfig.fromFile(
+  certPath = "server.crt",
+  keyPath = "server.key",
+  clientAuth = ClientAuth.Required
+)
+
+val serverConfig = Server.Config.default
+  .port(8443)
+  .ssl(sslConfig)
+```
+
+**Client Authentication Modes:**
+
+- `ClientAuth.Required`: Client must present a valid certificate
+- `ClientAuth.Optional`: Client certificate is requested but not required
+- `ClientAuth.NoneClientAuth`: No client authentication (default)
+
+### mTLS with Trust Store
+
+Validate client certificates against a trust store:
+
+```scala
+import zio.http.SSLConfig.Data.TrustManagerKeyStore
+
+val trustStore = TrustManagerKeyStore.fromFile(
+  file = "truststore.jks",
+  trustManagerPassword = Some(Secret("password"))
+)
+
+val sslConfig = SSLConfig.fromJavaxNetSslKeyStoreFile(
+  keyManagerFile = "server-keystore.jks",
+  keyManagerPassword = Some(Secret("server-pass")),
+  trustManagerKeyStore = Some(trustStore),
+  clientAuth = Some(ClientAuth.Required)
+)
+```
+
+### Complete mTLS Example
+
+```scala
+import zio._
+import zio.http._
+import zio.Config.Secret
+
+object MutualTLSServer extends ZIOAppDefault {
+  val serverKeyStore = "server_keystore.jks"
+  val serverTrustStore = "server_truststore.jks"
+  val password = Secret("changeit")
+
+  val sslConfig = SSLConfig.fromJavaxNetSslKeyStoreResource(
+    keyManagerResource = serverKeyStore,
+    keyManagerPassword = Some(password),
+    trustManagerKeyStore = Some(
+      SSLConfig.Data.TrustManagerKeyStore
+        .fromResource(serverTrustStore)
+        .trustManagerPassword(password)
+    ),
+    clientAuth = Some(ClientAuth.Required)
+  )
+
+  val routes = Routes(
+    Method.GET / "secure" -> handler { (req: Request) =>
+      // Client certificate available in request context
+      Response.text("Authenticated via mTLS")
+    }
+  )
+
+  val config = Server.Config.default
+    .port(8443)
+    .ssl(sslConfig)
+
+  def run = Server.serve(routes).provide(
+    ZLayer.succeed(config) >>> Server.live
+  )
+}
+```
+
+## Protocol Configuration
+
+Specify TLS protocol versions:
+
+```scala
+val sslConfig = SSLConfig.fromFile(
+  certPath = "server.crt",
+  keyPath = "server.key"
+).copy(protocols = Seq("TLSv1.3", "TLSv1.2"))
+```
+
+**Default protocols:** `TLSv1.3`, `TLSv1.2`
+
+<Note>
+TLS 1.3 is recommended for best security and performance. TLS 1.0 and 1.1 are deprecated.
+</Note>
+
+## SSL Providers
+
+Choose between SSL implementations:
+
+```scala
+import zio.http.SSLConfig.Provider
+
+// Use JDK SSL implementation (default)
+val jdkSSL = SSLConfig(
+  behaviour = SSLConfig.HttpBehaviour.Redirect,
+  data = SSLConfig.Data.FromFile("server.crt", "server.key", None),
+  provider = Provider.JDK
+)
+
+// Use OpenSSL implementation (requires native libraries)
+val openSSL = SSLConfig(
+  behaviour = SSLConfig.HttpBehaviour.Redirect,
+  data = SSLConfig.Data.FromFile("server.crt", "server.key", None),
+  provider = Provider.OpenSSL
+)
+```
+
+<Info>
+OpenSSL typically offers better performance but requires native libraries. JDK provider works everywhere.
+</Info>
+
+## Include Client Certificate
+
+Include client certificate information in requests:
+
+```scala
+val sslConfig = SSLConfig.fromFile(
+  certPath = "server.crt",
+  keyPath = "server.key",
+  clientAuth = Some(ClientAuth.Optional),
+  includeClientCert = true
+)
+```
+
+When enabled, client certificate details are available in the request context.
+
+## Configuration via File
+
+Load SSL configuration from `application.conf`:
+
+```hocon
+zio.http.server {
+  binding-port = 8443
+  
+  behaviour = "redirect"
+  
+  data {
+    certPath = "/etc/ssl/certs/server.crt"
+    keyPath = "/etc/ssl/private/server.key"
+    trust-cert-collection-path = "/etc/ssl/certs/ca-bundle.crt"
+  }
+  
+  provider = "jdk"
+}
+```
+
+Load in code:
+
+```scala
+val app = Server.serve(routes).provide(
+  Server.configured()
+)
+```
+
+## Production Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Strong Protocols">
+    Enable only TLS 1.2 and 1.3:
+    
+    ```scala
+    val sslConfig = SSLConfig.fromFile("cert.pem", "key.pem")
+      .copy(protocols = Seq("TLSv1.3", "TLSv1.2"))
+    ```
+  </Accordion>
+  
+  <Accordion title="Certificate Management">
+    - Use proper certificate authorities (Let's Encrypt, DigiCert, etc.)
+    - Rotate certificates before expiration
+    - Store private keys securely (encrypted filesystems, vaults)
+    - Never commit certificates to version control
+  </Accordion>
+  
+  <Accordion title="mTLS for Microservices">
+    Use mutual TLS for service-to-service authentication:
+    
+    ```scala
+    val sslConfig = SSLConfig.fromJavaxNetSslKeyStoreFile(
+      keyManagerFile = "service-identity.jks",
+      keyManagerPassword = Some(secretFromVault),
+      trustManagerKeyStore = Some(serviceTrustStore),
+      clientAuth = Some(ClientAuth.Required)
+    )
+    ```
+  </Accordion>
+  
+  <Accordion title="Force HTTPS">
+    Always redirect HTTP to HTTPS in production:
+    
+    ```scala
+    val sslConfig = SSLConfig.fromFile(
+      HttpBehaviour.Redirect,  // Default, but be explicit
+      "cert.pem",
+      "key.pem"
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Example: Let's Encrypt with Certbot
+
+```scala
+import zio._
+import zio.http._
+
+object LetsEncryptServer extends ZIOAppDefault {
+  // Certbot stores certificates in these locations
+  val certPath = "/etc/letsencrypt/live/example.com/fullchain.pem"
+  val keyPath = "/etc/letsencrypt/live/example.com/privkey.pem"
+  
+  val sslConfig = SSLConfig.fromFile(certPath, keyPath)
+  
+  val routes = Routes(
+    Method.GET / "hello" -> handler(Response.text("Hello via HTTPS!"))
+  )
+  
+  val config = Server.Config.default
+    .binding("0.0.0.0", 443)
+    .ssl(sslConfig)
+  
+  def run = Server.serve(routes).provide(
+    ZLayer.succeed(config) >>> Server.live
+  )
+}
+```
+
+## Testing SSL Configuration
+
+Test server configuration:
+
+```scala
+import zio.test._
+import zio.http._
+
+object SSLServerSpec extends ZIOSpecDefault {
+  val sslConfig = SSLConfig.fromResource("test.crt", "test.key")
+  val config = Server.Config.default.port(8073).ssl(sslConfig)
+  
+  val routes = Routes(
+    Method.GET / "secure" -> handler(Response.ok)
+  )
+  
+  def spec = suite("SSL Server")(
+    test("accepts HTTPS requests") {
+      val httpsUrl = URL.decode("https://localhost:8073/secure").toOption.get
+      
+      val clientSSL = ClientSSLConfig.FromCertResource("test.crt")
+      
+      for {
+        response <- Client.request(Request.get(httpsUrl))
+      } yield assertTrue(response.status == Status.Ok)
+    }
+  ).provide(
+    Server.customized,
+    ZLayer.succeed(config),
+    Client.customized,
+    ZLayer.succeed(ZClient.Config.default.ssl(clientSSL))
+  )
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/server/configuration">
+    Server configuration options
+  </Card>
+  <Card title="Client SSL" icon="shield-check" href="/client/ssl">
+    Configure SSL for HTTP clients
+  </Card>
+</CardGroup>

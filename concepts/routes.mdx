@@ -1,0 +1,330 @@
+---
+title: Routes
+description: Learn how to compose and organize HTTP routes in ZIO HTTP
+---
+
+`Routes` is a collection of routes that forms a complete HTTP application. It provides powerful composition operators and error handling capabilities.
+
+## Overview
+
+`Routes` represents an HTTP application that can be installed into a `Server`. All routes within a `Routes` collection have their errors handled through conversion into HTTP responses.
+
+```scala
+final case class Routes[-Env, +Err](routes: Chunk[Route[Env, Err]])
+```
+
+## Creating Routes
+
+### From Individual Routes
+
+Create routes from one or more `Route` instances:
+
+```scala
+import zio.http._
+
+val route1 = Method.GET / "users" -> handler { (req: Request) =>
+  Response.text("Get users")
+}
+
+val route2 = Method.POST / "users" -> handler { (req: Request) =>
+  Response.text("Create user")
+}
+
+val routes = Routes(route1, route2)
+```
+
+### From Iterable
+
+Construct routes from any iterable collection:
+
+```scala
+val routeList: List[Route[Any, Nothing]] = List(
+  Method.GET / "api" / "health" -> Handler.ok,
+  Method.GET / "api" / "status" -> Handler.text("Running")
+)
+
+val routes = Routes.fromIterable(routeList)
+```
+
+### Empty Routes
+
+Start with an empty routes collection:
+
+```scala
+val routes: Routes[Any, Nothing] = Routes.empty
+```
+
+## Composition
+
+### Combining Routes
+
+Use `++` to combine two routes collections:
+
+```scala
+val userRoutes = Routes(
+  Method.GET / "users" -> handler { (req: Request) =>
+    Response.text("List users")
+  }
+)
+
+val adminRoutes = Routes(
+  Method.GET / "admin" -> handler { (req: Request) =>
+    Response.text("Admin panel")
+  }
+)
+
+val allRoutes = userRoutes ++ adminRoutes
+```
+
+<Note>
+When combining routes with `++`, the new routes take precedence in case of conflicts.
+</Note>
+
+### Adding Individual Routes
+
+Prepend or append single routes:
+
+```scala
+val existingRoutes: Routes[Any, Nothing] = ???
+
+// Prepend a route
+val withHealth = healthRoute +: existingRoutes
+
+// Append a route
+val withMetrics = existingRoutes :+ metricsRoute
+```
+
+## Nesting
+
+Nest routes under a common path prefix:
+
+```scala
+import zio.http.codec.PathCodec
+
+val apiRoutes = Routes(
+  Method.GET / "users" -> Handler.text("Users"),
+  Method.GET / "posts" -> Handler.text("Posts")
+)
+
+// Nest under /api prefix
+val nested = apiRoutes.nest(PathCodec.literal("api"))
+// Now accessible at /api/users and /api/posts
+```
+
+## Error Handling
+
+### Handle Errors
+
+Convert typed errors into responses:
+
+```scala
+case class UserNotFound(id: String) extends Exception
+
+val routes: Routes[Any, UserNotFound] = Routes(
+  Method.GET / "users" / string("id") -> handler { (id: String, req: Request) =>
+    ZIO.fail(UserNotFound(id))
+  }
+)
+
+val handled: Routes[Any, Nothing] = routes.handleError { error =>
+  Response.notFound(error.getMessage)
+}
+```
+
+### Handle Errors with Request Context
+
+Access the request when handling errors:
+
+```scala
+val handled = routes.handleErrorRequest { (error, request) =>
+  Response.status(Status.NotFound)
+    .addHeader(Header.Custom("X-Request-Path", request.path.encode))
+}
+```
+
+### Handle Error Causes
+
+Handle both typed errors and defects:
+
+```scala
+val routes: Routes[Any, String] = ???
+
+val handled = routes.handleErrorCause { cause =>
+  cause.failureOption match {
+    case Some(error) => Response.badRequest(error)
+    case None => Response.internalServerError(cause.prettyPrint)
+  }
+}
+```
+
+### Sandbox
+
+Automatically convert all failures into responses:
+
+```scala
+val routes: Routes[Any, Throwable] = ???
+
+// All errors become HTTP responses with appropriate status codes
+val sandboxed: Routes[Any, Nothing] = routes.sandbox
+```
+
+<Warning>
+`sandbox` uses heuristics to determine status codes. Use explicit error handling for more control.
+</Warning>
+
+## Middleware
+
+Apply middleware to routes using the `@@` operator:
+
+```scala
+import zio.http._
+
+val routes: Routes[Any, Nothing] = ???
+
+// Apply CORS middleware
+val withCors = routes @@ Middleware.cors
+
+// Apply timeout
+val withTimeout = routes @@ Middleware.timeout(30.seconds)
+
+// Chain multiple middleware
+val enhanced = routes @@ 
+  Middleware.cors @@
+  Middleware.timeout(30.seconds) @@
+  Middleware.metrics()
+```
+
+See the [Middleware](/concepts/middleware) documentation for more details.
+
+## Running Routes
+
+### Execute with Request
+
+Apply a request to routes:
+
+```scala
+val routes: Routes[Any, Nothing] = ???
+val request = Request.get("/api/users")
+
+// Returns ZIO[Scope & Any, Nothing, Response]
+val response: ZIO[Scope, Nothing, Response] = routes.runZIO(request)
+```
+
+### Serve with Server
+
+Install routes into a server:
+
+```scala
+import zio._
+
+val routes: Routes[Any, Nothing] = ???
+
+val app = routes.serve
+  .provide(Server.default)
+```
+
+## Conversion
+
+### To Handler
+
+Convert routes to a request handler:
+
+```scala
+val routes: Routes[Any, Nothing] = ???
+
+val handler: Handler[Any, Nothing, Request, Response] = 
+  routes.toHandler
+```
+
+## Environment Management
+
+### Provide Environment
+
+Eliminate environmental requirements:
+
+```scala
+trait Database {
+  def getUsers: UIO[List[String]]
+}
+
+val routes: Routes[Database, Nothing] = Routes(
+  Method.GET / "users" -> handler { (req: Request) =>
+    ZIO.serviceWithZIO[Database](_.getUsers)
+      .map(users => Response.text(users.mkString(", ")))
+  }
+)
+
+val database: Database = ???
+
+// Provide the environment
+val providedRoutes: Routes[Any, Nothing] = 
+  routes.provide(database)
+```
+
+## Static File Serving
+
+### Serve from Directory
+
+Serve static files from the filesystem:
+
+```scala
+import java.io.File
+
+val staticRoutes = Routes.serveDirectory(
+  path = Path.empty / "assets",
+  docRoot = new File("/var/www/static")
+)
+```
+
+### Serve from Resources
+
+Serve files from classpath resources:
+
+```scala
+val resourceRoutes = Routes.serveResources(
+  path = Path.empty / "assets",
+  resourcePrefix = "public"
+)
+```
+
+<Note>
+The `resourcePrefix` must start with a `/` followed by at least one valid Java identifier character.
+</Note>
+
+## Checking Route Matches
+
+Check if routes can handle a request:
+
+```scala
+val routes: Routes[Any, Nothing] = ???
+val request = Request.get("/api/users")
+
+if (routes.isDefinedAt(request)) {
+  println("Route found")
+} else {
+  println("No matching route")
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Group Related Routes" icon="folder">
+    Organize routes by feature or domain for better maintainability.
+  </Card>
+  <Card title="Handle All Errors" icon="shield-check">
+    Convert all typed errors to responses before serving.
+  </Card>
+  <Card title="Use Middleware" icon="layer-group">
+    Apply cross-cutting concerns through middleware composition.
+  </Card>
+  <Card title="Nest Logically" icon="sitemap">
+    Use nesting to create clean URL hierarchies.
+  </Card>
+</CardGroup>
+
+## Related
+
+- [Route](/concepts/route) - Individual route definitions
+- [Handler](/concepts/handlers) - Request processing logic
+- [Middleware](/concepts/middleware) - Cross-cutting concerns

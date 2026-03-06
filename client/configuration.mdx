@@ -1,0 +1,581 @@
+---
+title: Client Configuration
+description: Configure SSL, connection pooling, timeouts, and other client settings
+---
+
+ZIO HTTP client provides extensive configuration options for SSL/TLS, connection pooling, timeouts, proxy settings, and more. Configuration can be provided through ZIO layers or programmatically.
+
+## Client Configuration Object
+
+The main configuration is defined by `ZClient.Config`:
+
+```scala
+final case class Config(
+  ssl: Option[ClientSSLConfig],
+  proxy: Option[Proxy],
+  connectionPool: ConnectionPoolConfig,
+  maxInitialLineLength: Int,
+  maxHeaderSize: Int,
+  requestDecompression: Decompression,
+  localAddress: Option[InetSocketAddress],
+  addUserAgentHeader: Boolean,
+  webSocketConfig: WebSocketConfig,
+  idleTimeout: Option[Duration],
+  connectionTimeout: Option[Duration],
+  bodyReadTimeout: Option[Duration],
+)
+```
+
+Reference: [ZClient.scala:522](zio-http/shared/src/main/scala/zio/http/ZClient.scala:522)
+
+## Default Configuration
+
+The default configuration provides sensible defaults:
+
+```scala
+val config = ZClient.Config.default
+// ssl = None
+// proxy = None
+// connectionPool = Fixed(10)
+// maxInitialLineLength = 4096
+// maxHeaderSize = 8192
+// requestDecompression = Decompression.No
+// localAddress = None
+// addUserAgentHeader = true
+// webSocketConfig = WebSocketConfig.default
+// idleTimeout = Some(50.seconds)
+// connectionTimeout = None
+// bodyReadTimeout = None (defaults to idleTimeout)
+```
+
+Reference: [ZClient.scala:760](zio-http/shared/src/main/scala/zio/http/ZClient.scala:760)
+
+## Timeout Configuration
+
+### Connection Timeout
+
+Time to establish a TCP connection:
+
+```scala
+val config = ZClient.Config.default
+  .connectionTimeout(10.seconds)
+
+// Or disable
+val noTimeout = ZClient.Config.default.noConnectionTimeout
+```
+
+Reference: [ZClient.scala:557](zio-http/shared/src/main/scala/zio/http/ZClient.scala:557)
+
+### Idle Timeout
+
+Time a channel can be idle without any data:
+
+```scala
+val config = ZClient.Config.default
+  .idleTimeout(30.seconds)
+
+// Or disable
+val noIdle = ZClient.Config.default.noIdleTimeout
+```
+
+Reference: [ZClient.scala:560](zio-http/shared/src/main/scala/zio/http/ZClient.scala:560)
+
+### Body Read Timeout
+
+Specific timeout for reading HTTP response bodies after headers are received:
+
+```scala
+val config = ZClient.Config.default
+  .bodyReadTimeout(60.seconds)
+
+// Or disable (falls back to idleTimeout)
+val noBodyTimeout = ZClient.Config.default.noBodyReadTimeout
+```
+
+References: [ZClient.scala:554](zio-http/shared/src/main/scala/zio/http/ZClient.scala:554), [ZClient.scala:574](zio-http/shared/src/main/scala/zio/http/ZClient.scala:574)
+
+<Note>
+The `bodyReadTimeout` is specifically for the time spent reading the body after headers are received. It's separate from `connectionTimeout` (TCP connection establishment) and `idleTimeout` (channel idle time). If not set, it defaults to `idleTimeout`.
+</Note>
+
+### Complete Timeout Example
+
+```scala
+import zio._
+import zio.http._
+import zio.http.netty.NettyConfig
+
+val timeoutConfig = ZClient.Config.default
+  .connectionTimeout(10.seconds)  // TCP connection
+  .idleTimeout(30.seconds)        // Channel idle time
+  .bodyReadTimeout(60.seconds)    // Response body reading
+
+val program = for {
+  response <- ZClient.batched(Request.get(url))
+  body <- response.body.asString
+} yield body
+
+val run = program.provide(
+  ZLayer.succeed(timeoutConfig),
+  Client.live,
+  ZLayer.succeed(NettyConfig.default),
+  DnsResolver.default,
+)
+```
+
+## Connection Pool Configuration
+
+### Fixed Connection Pool
+
+A fixed-size connection pool:
+
+```scala
+val config = ZClient.Config.default
+  .fixedConnectionPool(size = 10)
+```
+
+Reference: [ZClient.scala:587](zio-http/shared/src/main/scala/zio/http/ZClient.scala:587)
+
+### Dynamic Connection Pool
+
+A connection pool that can grow and shrink:
+
+```scala
+val config = ZClient.Config.default
+  .dynamicConnectionPool(
+    minimum = 10,
+    maximum = 20,
+    ttl = 5.seconds
+  )
+```
+
+Reference: [ZClient.scala:590](zio-http/shared/src/main/scala/zio/http/ZClient.scala:590)
+
+### Disabled Connection Pool
+
+Disable connection pooling entirely (creates new connection for each request):
+
+```scala
+val config = ZClient.Config.default
+  .disabledConnectionPool
+```
+
+Reference: [ZClient.scala:563](zio-http/shared/src/main/scala/zio/http/ZClient.scala:563)
+
+### Connection Pooling Example
+
+```scala
+import zio._
+import zio.http._
+import zio.http.netty.NettyConfig
+
+object ClientWithConnectionPooling extends ZIOAppDefault {
+  val program = for {
+    url    <- ZIO.fromEither(URL.decode("http://jsonplaceholder.typicode.com/posts"))
+    client <- ZIO.serviceWith[Client](_.addUrl(url))
+    _      <- ZIO.foreachParDiscard(Chunk.fromIterable(1 to 100)) { i =>
+      client.batched(Request.get(i.toString)).flatMap(_.body.asString).debug
+    }
+  } yield ()
+
+  val config = ZClient.Config.default.dynamicConnectionPool(10, 20, 5.second)
+
+  override val run =
+    program.provide(
+      ZLayer.succeed(config),
+      Client.live,
+      ZLayer.succeed(NettyConfig.default),
+      DnsResolver.default,
+    )
+}
+```
+
+Reference: [ClientWithConnectionPooling.scala](zio-http-example/src/main/scala/example/ClientWithConnectionPooling.scala)
+
+## SSL/TLS Configuration
+
+### SSL Configuration Options
+
+ZIO HTTP provides several SSL configuration options:
+
+```scala
+sealed trait ClientSSLConfig
+
+object ClientSSLConfig {
+  case object Default
+  case class FromCertFile(certPath: String)
+  case class FromCertResource(certPath: String)
+  case class FromTrustStoreFile(trustStorePath: String, trustStorePassword: Secret)
+  case class FromTrustStoreResource(trustStorePath: String, trustStorePassword: Secret)
+  case class FromClientAndServerCert(
+    serverCertConfig: ClientSSLConfig,
+    clientCertConfig: ClientSSLCertConfig,
+  )
+  case class FromJavaxNetSsl(
+    keyManagerKeyStoreType: String = "JKS",
+    keyManagerSource: FromJavaxNetSsl.Source = FromJavaxNetSsl.Empty,
+    keyManagerPassword: Option[Secret] = None,
+    trustManagerKeyStoreType: String = "JKS",
+    trustManagerSource: FromJavaxNetSsl.Source = FromJavaxNetSsl.Empty,
+    trustManagerPassword: Option[Secret] = None,
+  )
+}
+```
+
+Reference: [ClientSSLConfig.scala:22](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:22)
+
+### Default SSL
+
+Use the default JVM SSL configuration:
+
+```scala
+val config = ZClient.Config.default
+  .ssl(ClientSSLConfig.Default)
+```
+
+Reference: [ClientSSLConfig.scala:100](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:100)
+
+### Trust Store Configuration
+
+Use a custom trust store:
+
+```scala
+import zio.Config.Secret
+
+// From file
+val sslConfig = ClientSSLConfig.FromTrustStoreFile(
+  trustStorePath = "/path/to/truststore.jks",
+  trustStorePassword = "changeit"
+)
+
+// From resource
+val sslFromResource = ClientSSLConfig.FromTrustStoreResource(
+  trustStorePath = "truststore.jks",
+  trustStorePassword = "changeit"
+)
+
+val config = ZClient.Config.default.ssl(sslConfig)
+```
+
+References: [ClientSSLConfig.scala:162](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:162), [ClientSSLConfig.scala:103](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:103)
+
+### Certificate File Configuration
+
+```scala
+// From file
+val sslConfig = ClientSSLConfig.FromCertFile(
+  certPath = "/path/to/cert.pem"
+)
+
+// From resource
+val sslFromResource = ClientSSLConfig.FromCertResource(
+  certPath = "cert.pem"
+)
+```
+
+References: [ClientSSLConfig.scala:101](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:101), [ClientSSLConfig.scala:102](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:102)
+
+### Advanced SSL with FromJavaxNetSsl
+
+For advanced scenarios, use `FromJavaxNetSsl` for full control:
+
+```scala
+import zio.Config.Secret
+
+val sslConfig = ClientSSLConfig.FromJavaxNetSsl()
+  .trustManagerFile("/path/to/truststore.jks")
+  .trustManagerPassword("changeit")
+  .trustManagerKeyStoreType("JKS")
+  .keyManagerFile("/path/to/keystore.jks")
+  .keyManagerPassword("password")
+  .keyManagerKeyStoreType("PKCS12")
+  .build()
+
+val config = ZClient.Config.default.ssl(sslConfig)
+```
+
+References: [ClientSSLConfig.scala:109](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:109), [ClientSSLConfig.scala:133](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:133), [ClientSSLConfig.scala:140](zio-http/shared/src/main/scala/zio/http/ClientSSLConfig.scala:140)
+
+### SSL Per-Request
+
+You can also configure SSL per-request using the client builder:
+
+```scala
+val sslConfig = ClientSSLConfig.FromTrustStoreResource(
+  trustStorePath = "truststore.jks",
+  trustStorePassword = "changeit"
+)
+
+val client = ZIO.serviceWith[Client] { client =>
+  client
+    .url(url)
+    .ssl(sslConfig)
+}
+```
+
+Reference: [ZClient.scala:240](zio-http/shared/src/main/scala/zio/http/ZClient.scala:240)
+
+### Complete HTTPS Example
+
+```scala
+import zio._
+import zio.http._
+import zio.http.netty.NettyConfig
+import zio.http.netty.client.NettyClientDriver
+
+object HttpsClient extends ZIOAppDefault {
+  val url     = URL.decode("https://jsonplaceholder.typicode.com/todos/1").toOption.get
+  val headers = Headers(Header.Host("jsonplaceholder.typicode.com"))
+
+  val sslConfig = ClientSSLConfig.FromTrustStoreResource(
+    trustStorePath = "truststore.jks",
+    trustStorePassword = "changeit",
+  )
+
+  val clientConfig = ZClient.Config.default.ssl(sslConfig)
+
+  val program = for {
+    data <- ZClient.batched(Request.get(url).addHeaders(headers))
+    _    <- Console.printLine(data)
+  } yield ()
+
+  val run =
+    program.provide(
+      ZLayer.succeed(clientConfig),
+      Client.customized,
+      NettyClientDriver.live,
+      DnsResolver.default,
+      ZLayer.succeed(NettyConfig.default),
+    )
+}
+```
+
+Reference: [HttpsClient.scala](zio-http-example/src/main/scala/example/HttpsClient.scala)
+
+## Proxy Configuration
+
+### Basic Proxy
+
+```scala
+import zio.http._
+
+val proxyUrl = URL.decode("http://proxy.example.com:8080").toOption.get
+val proxy = Proxy(url = proxyUrl)
+
+val config = ZClient.Config.default.proxy(proxy)
+```
+
+References: [Proxy.scala:32](zio-http/shared/src/main/scala/zio/http/Proxy.scala:32), [ZClient.scala:580](zio-http/shared/src/main/scala/zio/http/ZClient.scala:580)
+
+### Authenticated Proxy
+
+```scala
+val proxyUrl = URL.decode("http://proxy.example.com:8080").toOption.get
+val credentials = Credentials("username", Secret("password"))
+
+val proxy = Proxy(
+  url = proxyUrl,
+  credentials = Some(credentials)
+)
+
+val config = ZClient.Config.default.proxy(proxy)
+```
+
+Reference: [Proxy.scala:32](zio-http/shared/src/main/scala/zio/http/Proxy.scala:32)
+
+### Proxy with Custom Headers
+
+```scala
+val proxyHeaders = Headers(
+  Header.Custom("X-Proxy-Authorization", "token"),
+  Header.Custom("X-Custom-Header", "value")
+)
+
+val proxy = Proxy(
+  url = proxyUrl,
+  credentials = None,
+  headers = proxyHeaders
+)
+```
+
+Reference: [Proxy.scala:32](zio-http/shared/src/main/scala/zio/http/Proxy.scala:32)
+
+### Proxy Per-Request
+
+```scala
+val client = ZIO.serviceWith[Client] { client =>
+  client
+    .url(url)
+    .proxy(proxy)
+}
+```
+
+Reference: [ZClient.scala:243](zio-http/shared/src/main/scala/zio/http/ZClient.scala:243)
+
+## Header Configuration
+
+### User Agent Header
+
+By default, ZIO HTTP adds a User-Agent header:
+
+```scala
+// Default User-Agent: "Zio-Http-Client/<version> (Scala <version>)"
+
+// Disable User-Agent header
+val config = ZClient.Config.default
+  .addUserAgentHeader(false)
+```
+
+References: [ZClient.scala:276](zio-http/shared/src/main/scala/zio/http/ZClient.scala:276), [ZClient.scala:539](zio-http/shared/src/main/scala/zio/http/ZClient.scala:539)
+
+### Maximum Header Size
+
+```scala
+val config = ZClient.Config.default
+  .maxHeaderSize(16384) // 16KB
+```
+
+Reference: [ZClient.scala:572](zio-http/shared/src/main/scala/zio/http/ZClient.scala:572)
+
+## Request Configuration
+
+### Maximum Initial Line Length
+
+```scala
+val config = ZClient.Config.default
+  .maxInitialLineLength(8192)
+```
+
+Reference: [ZClient.scala:566](zio-http/shared/src/main/scala/zio/http/ZClient.scala:566)
+
+### Request Decompression
+
+Enable automatic decompression of compressed responses:
+
+```scala
+// Strict mode (fails on invalid compression)
+val strictConfig = ZClient.Config.default
+  .requestDecompression(isStrict = true)
+
+// Non-strict mode (best effort)
+val lenientConfig = ZClient.Config.default
+  .requestDecompression(isStrict = false)
+```
+
+Reference: [ZClient.scala:582](zio-http/shared/src/main/scala/zio/http/ZClient.scala:582)
+
+## WebSocket Configuration
+
+```scala
+val wsConfig = WebSocketConfig.default
+  // Configure WebSocket-specific settings
+
+val config = ZClient.Config.default
+  .webSocketConfig(wsConfig)
+```
+
+Reference: [ZClient.scala:593](zio-http/shared/src/main/scala/zio/http/ZClient.scala:593)
+
+## Providing Configuration
+
+### Using Client.default
+
+The simplest way (uses default configuration):
+
+```scala
+val program: ZIO[Client, Throwable, Response] = 
+  ZClient.batched(Request.get(url))
+
+val run = program.provide(Client.default)
+```
+
+### Using Client.live with Custom Config
+
+```scala
+import zio.http.netty.NettyConfig
+
+val customConfig = ZClient.Config.default
+  .connectionTimeout(10.seconds)
+  .dynamicConnectionPool(10, 20, 5.seconds)
+  .ssl(sslConfig)
+
+val run = program.provide(
+  ZLayer.succeed(customConfig),
+  Client.live,
+  ZLayer.succeed(NettyConfig.default),
+  DnsResolver.default,
+)
+```
+
+### Using Client.customized
+
+For advanced customization with specific drivers:
+
+```scala
+import zio.http.netty.client.NettyClientDriver
+
+val run = program.provide(
+  ZLayer.succeed(customConfig),
+  Client.customized,
+  NettyClientDriver.live,
+  DnsResolver.default,
+  ZLayer.succeed(NettyConfig.default),
+)
+```
+
+## Complete Configuration Example
+
+```scala
+import zio._
+import zio.http._
+import zio.http.netty.NettyConfig
+
+object FullyConfiguredClient extends ZIOAppDefault {
+  val sslConfig = ClientSSLConfig.FromTrustStoreResource(
+    trustStorePath = "truststore.jks",
+    trustStorePassword = "changeit"
+  )
+  
+  val proxy = Proxy(
+    url = URL.decode("http://proxy.example.com:8080").toOption.get,
+    credentials = Some(Credentials("user", Secret("pass")))
+  )
+  
+  val clientConfig = ZClient.Config.default
+    .ssl(sslConfig)
+    .proxy(proxy)
+    .connectionTimeout(10.seconds)
+    .idleTimeout(30.seconds)
+    .bodyReadTimeout(60.seconds)
+    .dynamicConnectionPool(minimum = 10, maximum = 50, ttl = 5.seconds)
+    .maxHeaderSize(16384)
+    .maxInitialLineLength(8192)
+    .requestDecompression(isStrict = true)
+    .addUserAgentHeader(true)
+  
+  val program = for {
+    url <- ZIO.fromEither(URL.decode("https://api.example.com/data"))
+    response <- ZClient.batched(Request.get(url))
+    body <- response.body.asString
+    _ <- Console.printLine(body)
+  } yield ()
+  
+  override val run = program.provide(
+    ZLayer.succeed(clientConfig),
+    Client.live,
+    ZLayer.succeed(NettyConfig.default),
+    DnsResolver.default,
+  )
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Making Requests" icon="paper-plane" href="/client/making-requests">
+    Learn how to construct and send requests
+  </Card>
+  <Card title="WebSockets" icon="plug" href="/client/websockets">
+    Connect to WebSocket servers
+  </Card>
+</CardGroup>

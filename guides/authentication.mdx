@@ -1,0 +1,402 @@
+---
+title: "Authentication Patterns"
+description: "Learn how to implement authentication in ZIO HTTP using Bearer tokens, JWT, Basic Auth, and custom middleware"
+---
+
+ZIO HTTP provides flexible authentication mechanisms through middleware and handler aspects. This guide covers common authentication patterns and best practices.
+
+## Authentication Approaches
+
+ZIO HTTP supports multiple authentication strategies:
+
+- **Bearer Token Authentication** - Stateless token-based auth using JWT or opaque tokens
+- **Basic Authentication** - Simple username/password authentication
+- **Custom Authentication** - Build your own authentication middleware
+
+## Basic Authentication
+
+Basic Authentication is the simplest form of HTTP authentication. The client sends credentials with each request in the `Authorization` header.
+
+### Using Built-in Basic Auth
+
+ZIO HTTP provides a built-in `basicAuth` middleware:
+
+```scala
+import zio.http._
+import zio.http.Middleware.basicAuth
+
+val protectedRoutes: Routes[Any, Response] = Routes(
+  Method.GET / "user" / string("name") / "greet" ->
+    handler { (name: String, _: Request) =>
+      Response.text(s"Welcome to the ZIO party! ${name}")
+    },
+)
+
+// Apply basic auth middleware
+val routes: Routes[Any, Response] = 
+  protectedRoutes @@ basicAuth("admin", "admin")
+```
+
+The `basicAuth` middleware validates credentials on every request. If authentication fails, it returns a `401 Unauthorized` response with the appropriate `WWW-Authenticate` header.
+
+<Info>
+Basic authentication sends credentials in Base64 encoding (not encryption). Always use HTTPS in production to protect credentials in transit.
+</Info>
+
+## Bearer Token Authentication
+
+Bearer token authentication is more flexible and scalable than Basic Auth. The client obtains a token through a login endpoint and includes it in subsequent requests.
+
+### JWT Bearer Tokens
+
+JSON Web Tokens (JWT) are self-contained tokens that carry user information and claims. They don't require server-side storage.
+
+#### Creating a JWT Service
+
+First, add the JWT library dependency:
+
+```scala
+libraryDependencies += "com.github.jwt-scala" %% "jwt-core" % "10.0.4"
+```
+
+Define a service to issue and verify JWT tokens:
+
+```scala
+import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
+import zio._
+import java.time.Clock
+
+trait JwtTokenService {
+  def issue(username: String): UIO[String]
+  def verify(token: String): Task[String]
+}
+
+case class JwtTokenServiceLive(
+  secretKey: String,
+  tokenTTL: Duration,
+  algorithm: JwtAlgorithm,
+) extends JwtTokenService {
+  implicit val clock: Clock = Clock.systemUTC
+
+  override def issue(username: String): UIO[String] =
+    ZIO.succeed {
+      Jwt.encode(
+        JwtClaim(subject = Some(username))
+          .issuedNow
+          .expiresIn(tokenTTL.toSeconds),
+        secretKey,
+        algorithm,
+      )
+    }
+
+  override def verify(token: String): Task[String] =
+    ZIO
+      .fromTry(Jwt.decode(token, secretKey, Seq(algorithm)))
+      .map(_.subject)
+      .someOrFail(new Exception("Invalid token"))
+}
+
+object JwtTokenService {
+  def live(
+    secretKey: String,
+    tokenTTL: Duration = 15.minutes,
+    algorithm: JwtAlgorithm = JwtAlgorithm.HS512,
+  ): ULayer[JwtTokenServiceLive] =
+    ZLayer.succeed(JwtTokenServiceLive(secretKey, tokenTTL, algorithm))
+}
+```
+
+#### Creating Authentication Middleware
+
+Create a `HandlerAspect` that validates JWT tokens:
+
+```scala
+import zio.http._
+
+val bearerAuth: HandlerAspect[JwtTokenService, String] =
+  HandlerAspect.interceptIncomingHandler(
+    Handler.fromFunctionZIO[Request] { request =>
+      request.header(Header.Authorization) match {
+        case Some(Header.Authorization.Bearer(token)) =>
+          ZIO
+            .serviceWithZIO[JwtTokenService](_.verify(token.value.asString))
+            .map(username => (request, username))
+            .orElseFail(
+              Response.unauthorized
+                .addHeaders(Headers(Header.WWWAuthenticate.Bearer("Access")))
+            )
+        case _ => 
+          ZIO.fail(
+            Response.unauthorized
+              .addHeaders(Headers(Header.WWWAuthenticate.Bearer("Access")))
+          )
+      }
+    }
+  )
+```
+
+The middleware:
+1. Extracts the Bearer token from the `Authorization` header
+2. Verifies the token using the `JwtTokenService`
+3. Provides the username to the handler if valid
+4. Returns `401 Unauthorized` with `WWW-Authenticate` header if invalid
+
+#### Creating Protected Routes
+
+Apply the authentication middleware to protect routes:
+
+```scala
+val login = 
+  Method.POST / "login" ->
+    handler { (request: Request) =>
+      for {
+        form     <- request.body.asURLEncodedForm.orElseFail(Response.badRequest)
+        username <- ZIO.fromOption(form.get("username").flatMap(_.stringValue))
+                      .orElseFail(Response.badRequest("Missing username"))
+        password <- ZIO.fromOption(form.get("password").flatMap(_.stringValue))
+                      .orElseFail(Response.badRequest("Missing password"))
+        // Validate credentials (implement your logic here)
+        token    <- ZIO.serviceWithZIO[JwtTokenService](_.issue(username))
+      } yield Response.text(token)
+    }
+
+val profile =
+  Method.GET / "profile" / "me" -> 
+    handler { (_: Request) =>
+      ZIO.serviceWith[String](username => 
+        Response.text(s"Welcome $username!")
+      )
+    } @@ bearerAuth
+
+val routes = Routes(login, profile)
+```
+
+### Opaque Bearer Tokens
+
+Opaque tokens are random strings stored server-side. They offer immediate revocation capabilities.
+
+#### Token Service Implementation
+
+```scala
+import java.time.Instant
+import java.security.SecureRandom
+
+case class TokenInfo(username: String, expiresAt: Instant)
+
+trait TokenService {
+  def create(username: String): UIO[String]
+  def validate(token: String): UIO[Option[String]]
+  def revoke(username: String): UIO[Unit]
+}
+
+class InMemoryTokenService(tokenStorage: Ref[Map[String, TokenInfo]]) 
+    extends TokenService {
+  
+  private val TOKEN_LIFETIME = 300.seconds
+
+  override def create(username: String): UIO[String] =
+    for {
+      token <- generateSecureToken
+      now   <- Clock.instant
+      _     <- tokenStorage.update { tokens =>
+        tokens + (token -> TokenInfo(
+          username = username,
+          expiresAt = now.plusSeconds(TOKEN_LIFETIME.toSeconds),
+        ))
+      }
+    } yield token
+
+  override def validate(token: String): UIO[Option[String]] =
+    tokenStorage.modify { tokens =>
+      tokens.get(token) match {
+        case Some(tokenInfo) if tokenInfo.expiresAt.isAfter(Instant.now()) =>
+          (Some(tokenInfo.username), tokens)
+        case Some(_) =>
+          // Token expired, remove it
+          (None, tokens - token)
+        case None =>
+          (None, tokens)
+      }
+    }
+
+  override def revoke(username: String): UIO[Unit] =
+    tokenStorage.update {
+      _.filter { case (_, tokenInfo) =>
+        tokenInfo.username != username
+      }
+    }
+
+  private def generateSecureToken: UIO[String] =
+    ZIO.succeed {
+      val random = new SecureRandom()
+      val bytes  = new Array[Byte](32)
+      random.nextBytes(bytes)
+      java.util.Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
+    }
+}
+```
+
+<Note>
+Opaque tokens require server-side storage and lookups, but provide immediate revocation. JWT tokens are stateless but can't be revoked before expiration without additional infrastructure.
+</Note>
+
+## Custom Authentication Middleware
+
+You can create custom authentication middleware using `HandlerAspect`:
+
+```scala
+import zio.http._
+
+def customAuth[R, Ctx](
+  authenticate: Request => ZIO[R, Response, Ctx]
+): HandlerAspect[R, Ctx] =
+  HandlerAspect.interceptIncomingHandler(
+    Handler.fromFunctionZIO[Request] { request =>
+      authenticate(request).map(ctx => (request, ctx))
+    }
+  )
+
+// Usage example: API key authentication
+val apiKeyAuth: HandlerAspect[UserService, User] =
+  customAuth { request =>
+    request.header(Header.Custom("X-API-Key")) match {
+      case Some(apiKey) =>
+        ZIO
+          .serviceWithZIO[UserService](_.getUserByApiKey(apiKey.renderedValue))
+          .orElseFail(Response.unauthorized("Invalid API key"))
+      case None =>
+        ZIO.fail(Response.unauthorized("Missing API key"))
+    }
+  }
+```
+
+## Role-Based Access Control
+
+Extend authentication to include authorization checks:
+
+```scala
+case class UserInfo(
+  username: String,
+  email: String,
+  roles: Set[String],
+)
+
+def requireRole(role: String): HandlerAspect[Any, Unit] =
+  HandlerAspect.interceptIncomingHandler(
+    Handler.fromFunctionZIO[Request] { request =>
+      ZIO.serviceWith[UserInfo] { userInfo =>
+        if (userInfo.roles.contains(role))
+          (request, ())
+        else
+          throw Response.forbidden(s"Role '$role' required")
+      }
+    }
+  )
+
+// Protect admin routes
+val adminRoutes =
+  Method.GET / "admin" / "users" ->
+    handler { (_: Request) =>
+      ZIO.serviceWithZIO[UserService](_.getUsers).map { users =>
+        Response.json(users.toJson)
+      }
+    } @@ bearerAuth @@ requireRole("admin")
+```
+
+## Security Best Practices
+
+<Card title="Always Use HTTPS" icon="lock">
+Authentication tokens and credentials should always be transmitted over HTTPS to prevent interception.
+</Card>
+
+<Card title="Token Expiration" icon="clock">
+Set reasonable token expiration times. Short-lived tokens (15-30 minutes) with refresh tokens provide good security.
+</Card>
+
+<Card title="Secure Token Storage" icon="database">
+Store sensitive keys and secrets using environment variables or secure configuration management.
+</Card>
+
+<Card title="Rate Limiting" icon="shield">
+Implement rate limiting on authentication endpoints to prevent brute force attacks.
+</Card>
+
+## Complete Example
+
+Here's a complete authentication server:
+
+```scala
+import zio._
+import zio.http._
+
+object AuthenticationServer extends ZIOAppDefault {
+  
+  val SECRET_KEY = "your-secret-key"
+
+  def jwtEncode(username: String): String =
+    Jwt.encode(
+      JwtClaim(subject = Some(username)).issuedNow.expiresIn(300),
+      SECRET_KEY,
+      JwtAlgorithm.HS512
+    )
+
+  def jwtDecode(token: String): Try[JwtClaim] =
+    Jwt.decode(token, SECRET_KEY, Seq(JwtAlgorithm.HS512))
+
+  val bearerAuthWithContext: HandlerAspect[Any, String] =
+    HandlerAspect.interceptIncomingHandler(
+      Handler.fromFunctionZIO[Request] { request =>
+        request.header(Header.Authorization) match {
+          case Some(Header.Authorization.Bearer(token)) =>
+            ZIO
+              .fromTry(jwtDecode(token.value.asString))
+              .orElseFail(Response.badRequest("Invalid or expired token!"))
+              .flatMap(claim => 
+                ZIO.fromOption(claim.subject)
+                  .orElseFail(Response.badRequest("Missing subject claim!"))
+              )
+              .map(u => (request, u))
+          case _ => 
+            ZIO.fail(
+              Response.unauthorized
+                .addHeaders(Headers(Header.WWWAuthenticate.Bearer("Access")))
+            )
+        }
+      }
+    )
+
+  val routes: Routes[Any, Response] = Routes(
+    Method.GET / "profile" / "me" -> 
+      handler { (_: Request) =>
+        ZIO.serviceWith[String](name => Response.text(s"Welcome $name!"))
+      } @@ bearerAuthWithContext,
+      
+    Method.POST / "login" ->
+      handler { (request: Request) =>
+        for {
+          form     <- request.body.asMultipartForm
+                        .orElseFail(Response.badRequest)
+          username <- ZIO.fromOption(form.get("username").flatMap(_.stringValue))
+                        .orElseFail(Response.badRequest("Missing username"))
+          password <- ZIO.fromOption(form.get("password").flatMap(_.stringValue))
+                        .orElseFail(Response.badRequest("Missing password"))
+        } yield {
+          // In production, validate against a user database
+          if (password.reverse == username)
+            Response.text(jwtEncode(username))
+          else
+            Response.unauthorized("Invalid credentials")
+        }
+      },
+  )
+
+  override val run = Server.serve(routes).provide(Server.default)
+}
+```
+
+## Next Steps
+
+- Learn about [Error Handling](/guides/error-handling) to manage authentication failures
+- Explore [Dependency Injection](/guides/dependency-injection) to manage services
+- Read the full [JWT Bearer Token Authentication guide](/guides/authentication-with-jwt-bearer-tokens)
+- Check out [Opaque Bearer Token Authentication guide](/guides/authentication-with-opaque-bearer-tokens)
