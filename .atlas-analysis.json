@@ -1,0 +1,187 @@
+{
+  "projectType": "framework",
+  "projectName": "ZIO HTTP",
+  "projectDescription": "A next-generation Scala framework for building scalable, correct, and efficient HTTP clients and servers",
+  "theme": "aspen",
+  "primaryColor": "#040404",
+  "lightColor": "#d21204",
+  "darkColor": "#9b0404",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/routes",
+              "concepts/handlers",
+              "concepts/request",
+              "concepts/response",
+              "concepts/middleware"
+            ]
+          },
+          {
+            "group": "Server",
+            "pages": [
+              "server/overview",
+              "server/configuration",
+              "server/ssl-tls",
+              "server/websockets"
+            ]
+          },
+          {
+            "group": "Client",
+            "pages": [
+              "client/overview",
+              "client/making-requests",
+              "client/configuration",
+              "client/websockets"
+            ]
+          },
+          {
+            "group": "Routing",
+            "pages": [
+              "routing/route-patterns",
+              "routing/path-parameters",
+              "routing/query-parameters",
+              "routing/static-files"
+            ]
+          },
+          {
+            "group": "Request & Response",
+            "pages": [
+              "request-response/headers",
+              "request-response/body",
+              "request-response/cookies",
+              "request-response/forms",
+              "request-response/streaming"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/endpoints",
+              "advanced/codec",
+              "advanced/openapi",
+              "advanced/templating",
+              "advanced/testing"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/authentication",
+              "guides/error-handling",
+              "guides/dependency-injection",
+              "guides/cors",
+              "guides/file-uploads"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Types",
+            "pages": [
+              "api/routes",
+              "api/route",
+              "api/handler",
+              "api/request",
+              "api/response"
+            ]
+          },
+          {
+            "group": "Server & Client",
+            "pages": [
+              "api/server",
+              "api/client",
+              "api/middleware",
+              "api/handler-aspect"
+            ]
+          },
+          {
+            "group": "HTTP Components",
+            "pages": [
+              "api/headers",
+              "api/body",
+              "api/status",
+              "api/method",
+              "api/url"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "api/endpoint",
+              "api/codec",
+              "api/websocket",
+              "api/template"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/hello-world",
+              "examples/rest-api",
+              "examples/websocket-chat",
+              "examples/file-server",
+              "examples/authentication"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Type-safe HTTP server and client built on ZIO",
+    "Imperative and declarative endpoint definitions",
+    "Built-in WebSocket support for real-time applications",
+    "Middleware and handler aspects for cross-cutting concerns",
+    "OpenAPI documentation generation and endpoint generation from OpenAPI specs",
+    "Streaming request and response bodies with ZIO Streams",
+    "SSL/TLS support with multiple authentication schemes",
+    "HTML templating DSL for server-side rendering",
+    "Testing utilities without requiring a live server",
+    "Integration with ZIO Schema for JSON, Protobuf, Avro, and Thrift codecs"
+  ],
+  "publicApiSurface": [
+    "Routes - Collection of HTTP routes",
+    "Route - Single route with pattern and handler",
+    "Handler - Function from Request to Response",
+    "Server - HTTP server for serving routes",
+    "Client - HTTP client for making requests",
+    "Request - HTTP request with method, path, headers, and body",
+    "Response - HTTP response with status, headers, and body",
+    "Middleware - Cross-cutting concerns for routes",
+    "HandlerAspect - Aspects for transforming handlers",
+    "Endpoint - Declarative API endpoint definitions",
+    "HttpCodec - Type-safe HTTP codecs for request/response",
+    "WebSocketApp - WebSocket application handler",
+    "Body - Request/response body with streaming support",
+    "Headers - HTTP headers collection",
+    "Status - HTTP status codes",
+    "Method - HTTP methods (GET, POST, etc.)",
+    "Path - URL path with type-safe extraction",
+    "QueryParams - URL query parameters",
+    "Cookie - HTTP cookies",
+    "Form - Multipart form data",
+    "SSLConfig - SSL/TLS configuration",
+    "Template - HTML templating DSL"
+  ]
+}
